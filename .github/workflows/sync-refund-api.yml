@@ -1,4 +1,4 @@
-name: Sync API Specs to Postman   # Only once at the top
+name: Sync API Specs to Postman
 
 on:
   push:
@@ -9,9 +9,12 @@ on:
 jobs:
   sync-specs:
     runs-on: ubuntu-latest
+
     steps:
+      # Step 1: Checkout repository
       - uses: actions/checkout@v3
 
+      # Step 2: Update Spec in Postman
       - name: Update Spec in Postman
         run: |
           SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
@@ -21,8 +24,9 @@ jobs:
           curl -X PUT "https://api.getpostman.com/specs/$SPEC_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d @specs/payment-refund-api.json
+            -d @specs/payment-refund-api-openapi.yaml
 
+      # Step 3: Regenerate Collection from Spec
       - name: Regenerate Collection
         run: |
           SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
@@ -32,6 +36,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"options": {"requestParametersResolution": "example"}}'
 
+      # Step 4: Run Collection Tests
       - name: Run Collection Tests
         run: |
           COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
