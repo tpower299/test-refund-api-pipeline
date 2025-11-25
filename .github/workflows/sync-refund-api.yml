@@ -1,4 +1,4 @@
-name: Sync API Specs and Run Tests
+name: Sync API Specs and Run Tests with JWT
 
 on:
   push:
@@ -10,58 +10,53 @@ jobs:
   sync-and-test:
     runs-on: ubuntu-latest
     steps:
-      # 1. Checkout repository
+      # 1️⃣ Checkout the repo
       - uses: actions/checkout@v3
 
-      # 2. Update Spec in Postman
+      # 2️⃣ Retrieve latest spec
+      - name: Retrieve API Spec
+        run: |
+          echo "Downloading latest spec..."
+          curl -o specs/payment-refund-api-openapi.yaml \
+            https://raw.githubusercontent.com/tpower299/postman-refund-api-ingestion/main/specs/payment-refund-api-openapi.yaml
+
+      # 3️⃣ Update spec in Postman
       - name: Update Spec in Postman
         run: |
-          echo "Updating Postman API spec..."
           curl -X PUT "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d @specs/payment-refund-api-openapi.yaml
 
-      # 3. Regenerate collection from spec
-      - name: Regenerate Collection from Spec
+      # 4️⃣ Regenerate collection from spec
+      - name: Regenerate Collection
         run: |
-          echo "Regenerating collection from spec..."
           curl -X POST "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}/generations/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"options": {"requestParametersResolution": "example"}}'
 
-      # 4. Generate fresh JWT
-      - name: Generate JWT Token
-        id: generate_jwt
-        run: |
-          echo "Fetching new JWT token..."
-          JWT_TOKEN=$(curl -s -X POST "${{ secrets.JWT_TOKEN_URL }}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "client_id=${{ secrets.JWT_CLIENT_ID }}" \
-            -d "client_secret=${{ secrets.JWT_CLIENT_SECRET }}" \
-            -d "audience=${{ secrets.JWT_AUDIENCE }}" \
-            -d "grant_type=client_credentials" | jq -r '.access_token')
-          
-          echo "JWT_TOKEN=$JWT_TOKEN" >> $GITHUB_ENV
-
-      # 5. Run collection tests for each environment
-      - name: Run Collection Tests
+      # 5️⃣ Run collection tests for each environment with JWT
+      - name: Run Collection Tests (Dev/QA/UAT/Prod)
         run: |
           COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
-
-          for ENV in dev qa uat prod
+          for ENV in DEV QA UAT PROD
           do
-            echo "Running collection for environment: $ENV"
-            
-            # Define base URL for each environment (mock server for demo)
-            case $ENV in
-              dev) BASE_URL="https://ac1d1bb2-eba1-4c5e-b492-9483f4410770.mock.pstmn.io/dev" ;;
-              qa) BASE_URL="https://ac1d1bb2-eba1-4c5e-b492-9483f4410770.mock.pstmn.io/qa" ;;
-              uat) BASE_URL="https://ac1d1bb2-eba1-4c5e-b492-9483f4410770.mock.pstmn.io/uat" ;;
-              prod) BASE_URL="https://ac1d1bb2-eba1-4c5e-b492-9483f4410770.mock.pstmn.io/prod" ;;
-            esac
+            echo "Running collection against $ENV environment..."
 
+            BASE_URL="${{ secrets['BASE_URL_'$ENV] }}"
+            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID }}"
+            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET }}"
+            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE }}"
+            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL }}"
+
+            # Request JWT token from auth server
+            JWT_TOKEN=$(curl -s -X POST "$JWT_TOKEN_URL" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "grant_type=client_credentials&client_id=$JWT_CLIENT_ID&client_secret=$JWT_CLIENT_SECRET&audience=$JWT_AUDIENCE" \
+              | jq -r '.access_token')
+
+            # Run collection with dynamic baseUrl and JWT
             curl -X POST "https://api.getpostman.com/collections/$COLLECTION_ID/run" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
