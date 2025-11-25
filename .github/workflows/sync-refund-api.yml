@@ -1,4 +1,4 @@
-name: Sync API Specs and Run Tests with JWT
+name: Sync API Specs and Run Tests
 
 on:
   push:
@@ -9,18 +9,54 @@ on:
 jobs:
   sync-and-test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [DEV, QA, UAT, PROD]
+
     steps:
-      # 1️⃣ Checkout the repo
+      # 1. Checkout the repo
       - uses: actions/checkout@v3
 
-      # 2️⃣ Retrieve latest spec
-      - name: Retrieve API Spec
+      # 2. Set environment-specific secrets
+      - name: Set Environment Variables
         run: |
-          echo "Downloading latest spec..."
-          curl -o specs/payment-refund-api-openapi.yaml \
-            https://raw.githubusercontent.com/tpower299/postman-refund-api-ingestion/main/specs/payment-refund-api-openapi.yaml
+          if [ "${{ matrix.env }}" = "DEV" ]; then
+            BASE_URL="${{ secrets.BASE_URL_DEV }}"
+            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_DEV }}"
+            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_DEV }}"
+            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_DEV }}"
+            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_DEV }}"
+          elif [ "${{ matrix.env }}" = "QA" ]; then
+            BASE_URL="${{ secrets.BASE_URL_QA }}"
+            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_QA }}"
+            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_QA }}"
+            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_QA }}"
+            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_QA }}"
+          elif [ "${{ matrix.env }}" = "UAT" ]; then
+            BASE_URL="${{ secrets.BASE_URL_UAT }}"
+            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_UAT }}"
+            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_UAT }}"
+            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_UAT }}"
+            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_UAT }}"
+          elif [ "${{ matrix.env }}" = "PROD" ]; then
+            BASE_URL="${{ secrets.BASE_URL_PROD }}"
+            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_PROD }}"
+            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_PROD }}"
+            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_PROD }}"
+            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_PROD }}"
+          else
+            echo "Unknown environment"
+            exit 1
+          fi
 
-      # 3️⃣ Update spec in Postman
+          echo "BASE_URL=$BASE_URL" >> $GITHUB_ENV
+          echo "JWT_CLIENT_ID=$JWT_CLIENT_ID" >> $GITHUB_ENV
+          echo "JWT_CLIENT_SECRET=$JWT_CLIENT_SECRET" >> $GITHUB_ENV
+          echo "JWT_TOKEN_URL=$JWT_TOKEN_URL" >> $GITHUB_ENV
+          echo "JWT_AUDIENCE=$JWT_AUDIENCE" >> $GITHUB_ENV
+          echo "ENV=${{ matrix.env }}" >> $GITHUB_ENV
+
+      # 3. Update spec in Postman
       - name: Update Spec in Postman
         run: |
           curl -X PUT "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}" \
@@ -28,45 +64,53 @@ jobs:
             -H "Content-Type: application/json" \
             -d @specs/payment-refund-api-openapi.yaml
 
-      # 4️⃣ Regenerate collection from spec
-      - name: Regenerate Collection
+      # 4. Regenerate collection from spec
+      - name: Regenerate Collection from Spec
         run: |
           curl -X POST "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}/generations/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"options": {"requestParametersResolution": "example"}}'
 
-      # 5️⃣ Run collection tests for each environment with JWT
-      - name: Run Collection Tests (Dev/QA/UAT/Prod)
+      # 5. Inject JWT Pre-request Script (for collection)
+      - name: Inject JWT Pre-request Script
         run: |
           COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
-          for ENV in DEV QA UAT PROD
-          do
-            echo "Running collection against $ENV environment..."
+          curl -X PUT "https://api.getpostman.com/collections/$COLLECTION_ID" \
+            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"event\": [
+                {
+                  \"listen\": \"prerequest\",
+                  \"script\": {
+                    \"type\": \"text/javascript\",
+                    \"exec\": [
+                      \"const clientId = '$JWT_CLIENT_ID';\",
+                      \"const clientSecret = '$JWT_CLIENT_SECRET';\",
+                      \"const tokenUrl = '$JWT_TOKEN_URL';\",
+                      \"const audience = '$JWT_AUDIENCE';\",
+                      \"const options = { method: 'POST', url: tokenUrl, header: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'client_id=' + clientId + '&client_secret=' + clientSecret + '&audience=' + audience + '&grant_type=client_credentials' }; \",
+                      \"pm.sendRequest(options, function (err, res) { pm.environment.set('jwtToken', res.json().access_token); });\"
+                    ]
+                  }
+                }
+              ]
+            }"
 
-            BASE_URL="${{ secrets['BASE_URL_'$ENV] }}"
-            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID }}"
-            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET }}"
-            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE }}"
-            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL }}"
-
-            # Request JWT token from auth server
-            JWT_TOKEN=$(curl -s -X POST "$JWT_TOKEN_URL" \
-              -H "Content-Type: application/x-www-form-urlencoded" \
-              -d "grant_type=client_credentials&client_id=$JWT_CLIENT_ID&client_secret=$JWT_CLIENT_SECRET&audience=$JWT_AUDIENCE" \
-              | jq -r '.access_token')
-
-            # Run collection with dynamic baseUrl and JWT
-            curl -X POST "https://api.getpostman.com/collections/$COLLECTION_ID/run" \
-              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              -d "{
-                    \"environment\": {
-                      \"values\": [
-                        {\"key\": \"baseUrl\", \"value\": \"$BASE_URL\", \"enabled\": true},
-                        {\"key\": \"jwtToken\", \"value\": \"$JWT_TOKEN\", \"enabled\": true}
-                      ]
-                    }
-                  }"
-          done
+      # 6. Run collection tests
+      - name: Run Collection Tests
+        run: |
+          COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
+          curl -X POST "https://api.getpostman.com/collections/$COLLECTION_ID/run" \
+            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+                  \"environment\": {
+                    \"values\": [
+                      {\"key\": \"baseUrl\", \"value\": \"$BASE_URL\", \"enabled\": true},
+                      {\"key\": \"jwtToken\", \"value\": \"{{jwtToken}}\", \"enabled\": true}
+                    ]
+                  }
+                }"
 
