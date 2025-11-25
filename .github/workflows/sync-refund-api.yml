@@ -1,4 +1,4 @@
-name: Sync API Specs & Run Collection
+name: Sync API Specs to Postman
 
 on:
   push:
@@ -7,51 +7,62 @@ on:
       - 'specs/**/*.json'
 
 jobs:
-  sync-and-test:
+  sync-specs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      # Step 1: Checkout the repo
+      - uses: actions/checkout@v3
 
-      - name: Install Node.js
+      # Step 2: Install Node (needed for Postman CLI)
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: '20'  # Ensure a Node version compatible with Postman CLI
 
+      # Step 3: Install Postman CLI
       - name: Install Postman CLI
         run: npm install -g postman-cli
 
+      # Step 4: Login to Postman CLI using API key
       - name: Login to Postman CLI
-        env:
-          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-        run: postman login --apikey "$POSTMAN_API_KEY"
-
-      - name: Update Spec in Postman
-        env:
-          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          POSTMAN_SPEC_ID: ${{ secrets.POSTMAN_SPEC_ID }}
         run: |
-          curl -X PUT "https://api.getpostman.com/specs/$POSTMAN_SPEC_ID" \
-            -H "X-Api-Key: $POSTMAN_API_KEY" \
+          echo "$POSTMAN_API_KEY" > ~/.postman_apikey
+          postman login
+        env:
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
+
+      # Step 5: Update Spec in Postman
+      - name: Update Spec in Postman
+        run: |
+          SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
+          curl -X PUT "https://api.getpostman.com/specs/$SPEC_ID" \
+            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d @specs/payment-refund-api-openapi.yaml
-
-      - name: Regenerate Collection from Spec
         env:
           POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          POSTMAN_SPEC_ID: ${{ secrets.POSTMAN_SPEC_ID }}
+
+      # Step 6: Regenerate Collection from Spec
+      - name: Regenerate Collection
         run: |
-          curl -X POST "https://api.getpostman.com/specs/$POSTMAN_SPEC_ID/generations/collection" \
-            -H "X-Api-Key: $POSTMAN_API_KEY" \
+          SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
+          curl -X POST "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
+            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d '{"options": {"requestParametersResolution": "example"}}'
-
-      - name: Run Collection Tests
         env:
-          POSTMAN_COLLECTION_ID: ${{ secrets.POSTMAN_COLLECTION_ID }}
-          BASE_URL: ${{ secrets.BASE_URL }}
-        run: |
-          npx postman-cli collection run "$POSTMAN_COLLECTION_ID" \
-            --base-url "$BASE_URL"
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
 
+      # Step 7: Run Collection (with optional environment)
+      - name: Run Collection
+        run: |
+          COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
+          ENV_ID="${{ secrets.POSTMAN_ENVIRONMENT_ID }}" # Optional, can be empty
+          if [ -z "$ENV_ID" ]; then
+            npx postman-cli collection run $COLLECTION_ID
+          else
+            npx postman-cli collection run $COLLECTION_ID --environment $ENV_ID
+          fi
+        env:
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
