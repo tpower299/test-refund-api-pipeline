@@ -1,4 +1,4 @@
-name: Sync Refund API to Postman
+name: Sync API Specs & Run Collection
 
 on:
   push:
@@ -7,44 +7,51 @@ on:
       - 'specs/**/*.json'
 
 jobs:
-  sync-specs:
+  sync-and-test:
     runs-on: ubuntu-latest
+
     steps:
-      # 1️⃣ Checkout repository
-      - uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      # 2️⃣ Update Spec in Postman
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+
+      - name: Install Postman CLI
+        run: npm install -g postman-cli
+
+      - name: Login to Postman CLI
+        env:
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
+        run: postman login --apikey "$POSTMAN_API_KEY"
+
       - name: Update Spec in Postman
+        env:
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
+          POSTMAN_SPEC_ID: ${{ secrets.POSTMAN_SPEC_ID }}
         run: |
-          SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
-          WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID }}"
-
-          curl -X PUT "https://api.getpostman.com/specs/$SPEC_ID" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+          curl -X PUT "https://api.getpostman.com/specs/$POSTMAN_SPEC_ID" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
             -d @specs/payment-refund-api-openapi.yaml
 
-      # 3️⃣ Regenerate Collection
-      - name: Regenerate Collection
+      - name: Regenerate Collection from Spec
+        env:
+          POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
+          POSTMAN_SPEC_ID: ${{ secrets.POSTMAN_SPEC_ID }}
         run: |
-          SPEC_ID="${{ secrets.POSTMAN_SPEC_ID }}"
-
-          curl -X POST "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+          curl -X POST "https://api.getpostman.com/specs/$POSTMAN_SPEC_ID/generations/collection" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
             -d '{"options": {"requestParametersResolution": "example"}}'
 
-      # 4️⃣ Run Collection Tests using baseUrl from secrets
       - name: Run Collection Tests
+        env:
+          POSTMAN_COLLECTION_ID: ${{ secrets.POSTMAN_COLLECTION_ID }}
+          BASE_URL: ${{ secrets.BASE_URL }}
         run: |
-          COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
-          set +e  # Allow failures without stopping immediately
-          npx postman-cli collection run $COLLECTION_ID \
-            --global baseUrl="${{ secrets.BASE_URL }}" \
-            --api-key "${{ secrets.POSTMAN_API_KEY }}"
-          EXIT_CODE=$?
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "⚠️ Some tests failed in the collection. Check the logs above for details."
-            exit $EXIT_CODE
-          fi
+          npx postman-cli collection run "$POSTMAN_COLLECTION_ID" \
+            --base-url "$BASE_URL"
 
