@@ -1,4 +1,4 @@
-name: Sync API Specs and Run Tests
+name: Sync API Specs and Update Postman Collections
 
 on:
   push:
@@ -17,132 +17,139 @@ jobs:
       # 1. Checkout repo
       - uses: actions/checkout@v3
 
-      # 2. Set environment variables based on matrix
+      # 2. Set environment variables per matrix
       - name: Set Environment Variables
         run: |
-          if [ "${{ matrix.env }}" = "DEV" ]; then
-            BASE_URL="${{ secrets.BASE_URL_DEV }}"
-            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_DEV }}"
-            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_DEV }}"
-            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_DEV }}"
-            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_DEV }}"
-          elif [ "${{ matrix.env }}" = "QA" ]; then
-            BASE_URL="${{ secrets.BASE_URL_QA }}"
-            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_QA }}"
-            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_QA }}"
-            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_QA }}"
-            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_QA }}"
-          elif [ "${{ matrix.env }}" = "UAT" ]; then
-            BASE_URL="${{ secrets.BASE_URL_UAT }}"
-            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_UAT }}"
-            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_UAT }}"
-            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_UAT }}"
-            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_UAT }}"
-          elif [ "${{ matrix.env }}" = "PROD" ]; then
-            BASE_URL="${{ secrets.BASE_URL_PROD }}"
-            JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_PROD }}"
-            JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_PROD }}"
-            JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_PROD }}"
-            JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_PROD }}"
-          fi
+          case "${{ matrix.env }}" in
+            DEV)
+              BASE_URL="${{ secrets.BASE_URL_DEV }}"
+              JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_DEV }}"
+              JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_DEV }}"
+              JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_DEV }}"
+              JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_DEV }}"
+              WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID_DEV }}"
+              ;;
+            QA)
+              BASE_URL="${{ secrets.BASE_URL_QA }}"
+              JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_QA }}"
+              JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_QA }}"
+              JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_QA }}"
+              JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_QA }}"
+              WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID_QA }}"
+              ;;
+            UAT)
+              BASE_URL="${{ secrets.BASE_URL_UAT }}"
+              JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_UAT }}"
+              JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_UAT }}"
+              JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_UAT }}"
+              JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_UAT }}"
+              WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID_UAT }}"
+              ;;
+            PROD)
+              BASE_URL="${{ secrets.BASE_URL_PROD }}"
+              JWT_CLIENT_ID="${{ secrets.JWT_CLIENT_ID_PROD }}"
+              JWT_CLIENT_SECRET="${{ secrets.JWT_CLIENT_SECRET_PROD }}"
+              JWT_TOKEN_URL="${{ secrets.JWT_TOKEN_URL_PROD }}"
+              JWT_AUDIENCE="${{ secrets.JWT_AUDIENCE_PROD }}"
+              WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID_PROD }}"
+              ;;
+          esac
 
           echo "BASE_URL=$BASE_URL" >> $GITHUB_ENV
           echo "JWT_CLIENT_ID=$JWT_CLIENT_ID" >> $GITHUB_ENV
           echo "JWT_CLIENT_SECRET=$JWT_CLIENT_SECRET" >> $GITHUB_ENV
           echo "JWT_TOKEN_URL=$JWT_TOKEN_URL" >> $GITHUB_ENV
           echo "JWT_AUDIENCE=$JWT_AUDIENCE" >> $GITHUB_ENV
+          echo "WORKSPACE_ID=$WORKSPACE_ID" >> $GITHUB_ENV
           echo "ENV=${{ matrix.env }}" >> $GITHUB_ENV
 
-      # 3. Check if spec exists (Get metadata)
-      - name: Check If Spec Exists
-        id: checkspec
+      # 3. Get changed spec files
+      - name: Find changed specs
+        id: specs
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}")
+          FILES=$(git diff --name-only ${{ github.sha }}^ ${{ github.sha }} | grep '^specs/')
+          echo "CHANGED_SPECS=$FILES" >> $GITHUB_ENV
+          echo "Changed specs: $FILES"
 
-          echo "HTTP_STATUS=$STATUS" >> $GITHUB_ENV
-          echo "Spec lookup returned: $STATUS"
-
-      # 4a. Create spec if not found
-      - name: Create Spec in Postman (if missing)
-        if: env.HTTP_STATUS == '404'
+      # 4. Process each changed spec
+      - name: Process changed specs
         run: |
-          echo "Spec not found — creating new spec…"
+          for SPEC_FILE in $CHANGED_SPECS; do
+            SPEC_NAME=$(basename "$SPEC_FILE" .yaml)
+            echo "Processing spec: $SPEC_NAME ($SPEC_FILE)"
 
-          curl -X POST \
-            "https://api.getpostman.com/specs?workspaceId=${{ secrets.POSTMAN_WORKSPACE_ID }}" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            --data-binary @specs/payment-refund-api-openapi.yaml
+            # --- Check if spec exists ---
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+              "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}")
 
-      # 4b. Update spec if exists
-      - name: Update Spec in Postman (if exists)
-        if: env.HTTP_STATUS == '200'
-        run: |
-          echo "Spec exists — updating…"
+            # --- Create or Update Spec ---
+            if [ "$STATUS" = "404" ]; then
+              echo "Spec not found — creating..."
+              curl -X POST \
+                "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
+                -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$SPEC_FILE"
+            else
+              echo "Spec exists — updating..."
+              curl -X PUT \
+                "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}" \
+                -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$SPEC_FILE"
+            fi
 
-          curl -X PUT \
-            "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            --data-binary @specs/payment-refund-api-openapi.yaml
+            # --- Generate collection in workspace ---
+            COLLECTION_JSON=$(curl -s -X POST \
+              "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}/generations/collection" \
+              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                    \"options\": { \"overwrite\": true, \"requestParametersResolution\": \"example\" },
+                    \"workspace\": { \"id\": \"$WORKSPACE_ID\" }
+                  }")
 
-      # 5. Regenerate collection with overwrite=true
-      - name: Regenerate Collection from Spec
-        run: |
-          curl -X POST \
-            "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}/generations/collection" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-                  "options": {
-                    "overwrite": true,
-                    "requestParametersResolution": "example"
+            echo "$COLLECTION_JSON" > "${SPEC_NAME}_collection.json"
+
+            COLLECTION_ID=$(echo "$COLLECTION_JSON" | jq -r '.collection.uid')
+            echo "COLLECTION_ID=$COLLECTION_ID" >> $GITHUB_ENV
+
+            # --- Inject JWT pre-request script ---
+            curl -X PUT "https://api.getpostman.com/collections/$COLLECTION_ID" \
+              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"event\": [
+                  {
+                    \"listen\": \"prerequest\",
+                    \"script\": {
+                      \"type\": \"text/javascript\",
+                      \"exec\": [
+                        \"const clientId = '$JWT_CLIENT_ID';\",
+                        \"const clientSecret = '$JWT_CLIENT_SECRET';\",
+                        \"const tokenUrl = '$JWT_TOKEN_URL';\",
+                        \"const audience = '$JWT_AUDIENCE';\",
+                        \"const options = { method: 'POST', url: tokenUrl, header: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'client_id=' + clientId + '&client_secret=' + clientSecret + '&audience=' + audience + '&grant_type=client_credentials' };\",
+                        \"pm.sendRequest(options, function (err, res) { pm.environment.set('jwtToken', res.json().access_token); });\"
+                      ]
+                    }
                   }
-                }'
+                ]
+              }"
 
-      # 6. Inject JWT pre-request script dynamically
-      - name: Inject JWT Pre-request Script
-        run: |
-          COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
+            # --- Run collection tests ---
+            curl -X POST \
+              "https://api.getpostman.com/collections/$COLLECTION_ID/run" \
+              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                    \"environment\": {
+                      \"values\": [
+                        {\"key\": \"baseUrl\", \"value\": \"$BASE_URL\", \"enabled\": true},
+                        {\"key\": \"jwtToken\", \"value\": \"{{jwtToken}}\", \"enabled\": true}
+                      ]
+                    }
+                  }"
+          done
 
-          curl -X PUT "https://api.getpostman.com/collections/$COLLECTION_ID" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-              \"event\": [
-                {
-                  \"listen\": \"prerequest\",
-                  \"script\": {
-                    \"type\": \"text/javascript\",
-                    \"exec\": [
-                      \"const clientId = '$JWT_CLIENT_ID';\",
-                      \"const clientSecret = '$JWT_CLIENT_SECRET';\",
-                      \"const tokenUrl = '$JWT_TOKEN_URL';\",
-                      \"const audience = '$JWT_AUDIENCE';\",
-                      \"const options = { method: 'POST', url: tokenUrl, header: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'client_id=' + clientId + '&client_secret=' + clientSecret + '&audience=' + audience + '&grant_type=client_credentials' };\",
-                      \"pm.sendRequest(options, function (err, res) { pm.environment.set('jwtToken', res.json().access_token); });\"
-                    ]
-                  }
-                }
-              ]
-            }"
-
-      # 7. Run Postman collection tests
-      - name: Run Collection Tests
-        run: |
-          COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
-
-          curl -X POST \
-            "https://api.getpostman.com/collections/$COLLECTION_ID/run" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{
-                  \"environment\": {
-                    \"values\": [
-                      {\"key\": \"baseUrl\", \"value\": \"$BASE_URL\", \"enabled\": true},
-                      {\"key\": \"jwtToken\", \"value\": \"{{jwtToken}}\", \"enabled\": true}
-                    ]
-                  }
-                }"
