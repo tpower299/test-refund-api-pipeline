@@ -74,13 +74,13 @@ jobs:
             SPEC_NAME=$(basename "$SPEC_FILE" | sed 's/\.[^.]*$//')
             echo "Processing spec: $SPEC_NAME ($SPEC_FILE)"
 
-            # Convert YAML to JSON safely
-            if [[ "$SPEC_FILE" == *.yaml ]]; then
-              SPEC_CONTENT=$(yq -o=json eval "$SPEC_FILE")
-            else
-              SPEC_CONTENT=$(cat "$SPEC_FILE")
-            fi
-
+# Convert YAML to JSON safely using yq
+if [[ "$SPEC_FILE" == *.yaml ]]; then
+  # yq v4 syntax
+  SPEC_CONTENT=$(yq eval -o=json "$SPEC_FILE")
+else
+  SPEC_CONTENT=$(cat "$SPEC_FILE")
+fi
             # Check if the spec exists (safe iteration)
             EXISTING_SPEC_ID=$(curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
               "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
