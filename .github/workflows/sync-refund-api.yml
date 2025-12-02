@@ -64,13 +64,18 @@ jobs:
             -H "Content-Type: application/json" \
             -d @specs/payment-refund-api-openapi.yaml
 
-      # 4. Regenerate collection from spec
+      # 4. Regenerate collection from spec (force update so descriptions show)
       - name: Regenerate Collection from Spec
         run: |
           curl -X POST "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}/generations/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d '{"options": {"requestParametersResolution": "example"}}'
+            -d '{
+                  "options": {
+                    "requestParametersResolution": "example",
+                    "overwrite": true
+                  }
+                }'
 
       # 5. Inject JWT Pre-request Script (for collection)
       - name: Inject JWT Pre-request Script
@@ -113,4 +118,3 @@ jobs:
                     ]
                   }
                 }"
-
