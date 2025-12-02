@@ -16,6 +16,8 @@ jobs:
     steps:
       # 1. Checkout repo
       - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch full history to handle diffs correctly
 
       # 2. Set environment variables per matrix
       - name: Set Environment Variables
@@ -63,11 +65,23 @@ jobs:
           echo "WORKSPACE_ID=$WORKSPACE_ID" >> $GITHUB_ENV
           echo "ENV=${{ matrix.env }}" >> $GITHUB_ENV
 
-      # 3. Get changed spec files
+      # 3. Get changed spec files robustly
       - name: Find changed specs
         id: specs
         run: |
-          FILES=$(git diff --name-only ${{ github.sha }}^ ${{ github.sha }} | grep '^specs/')
+          # Handle first commit or shallow clone
+          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+            FILES=$(git diff --name-only HEAD^ HEAD | grep '^specs/')
+          else
+            FILES=$(git ls-files specs/)
+          fi
+
+          # Fail if no specs found
+          if [ -z "$FILES" ]; then
+            echo "No changed spec files found, skipping."
+            exit 0
+          fi
+
           echo "CHANGED_SPECS=$FILES" >> $GITHUB_ENV
           echo "Changed specs: $FILES"
 
@@ -111,7 +125,6 @@ jobs:
                   }")
 
             echo "$COLLECTION_JSON" > "${SPEC_NAME}_collection.json"
-
             COLLECTION_ID=$(echo "$COLLECTION_JSON" | jq -r '.collection.uid')
             echo "COLLECTION_ID=$COLLECTION_ID" >> $GITHUB_ENV
 
