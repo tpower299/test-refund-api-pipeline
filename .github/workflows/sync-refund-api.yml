@@ -53,42 +53,42 @@ jobs:
           echo "JWT_AUDIENCE=$JWT_AUDIENCE" >> $GITHUB_ENV
           echo "ENV=${{ matrix.env }}" >> $GITHUB_ENV
 
-      # 3. Check if spec exists
+      # 3. Check if spec exists (Get metadata)
       - name: Check If Spec Exists
         id: checkspec
         run: |
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}")
 
-          echo "HTTP_STATUS=$RESPONSE" >> $GITHUB_ENV
-          echo "Spec lookup returned status: $RESPONSE"
+          echo "HTTP_STATUS=$STATUS" >> $GITHUB_ENV
+          echo "Spec lookup returned: $STATUS"
 
-      # 4a. Create spec if not found (404)
+      # 4a. Create spec if not found
       - name: Create Spec in Postman (if missing)
         if: env.HTTP_STATUS == '404'
         run: |
-          echo "Spec not found — creating new spec in Postman…"
+          echo "Spec not found — creating new spec…"
 
           curl -X POST \
             "https://api.getpostman.com/specs?workspaceId=${{ secrets.POSTMAN_WORKSPACE_ID }}" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d @specs/payment-refund-api-openapi.yaml
+            --data-binary @specs/payment-refund-api-openapi.yaml
 
-      # 4b. Update spec if exists (200)
+      # 4b. Update spec if exists
       - name: Update Spec in Postman (if exists)
         if: env.HTTP_STATUS == '200'
         run: |
-          echo "Spec exists — updating spec in Postman…"
+          echo "Spec exists — updating…"
 
           curl -X PUT \
             "https://api.getpostman.com/specs/${{ secrets.POSTMAN_SPEC_ID }}" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d @specs/payment-refund-api-openapi.yaml
+            --data-binary @specs/payment-refund-api-openapi.yaml
 
-      # 5. Regenerate collection (overwrite=true ensures updated descriptions)
+      # 5. Regenerate collection with overwrite=true
       - name: Regenerate Collection from Spec
         run: |
           curl -X POST \
@@ -102,7 +102,7 @@ jobs:
                   }
                 }'
 
-      # 6. Inject JWT pre-request script
+      # 6. Inject JWT pre-request script dynamically
       - name: Inject JWT Pre-request Script
         run: |
           COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
@@ -129,7 +129,7 @@ jobs:
               ]
             }"
 
-      # 7. Run tests
+      # 7. Run Postman collection tests
       - name: Run Collection Tests
         run: |
           COLLECTION_ID="${{ secrets.POSTMAN_COLLECTION_ID }}"
