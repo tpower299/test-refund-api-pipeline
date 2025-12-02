@@ -17,7 +17,13 @@ jobs:
       # 1. Checkout repo
       - uses: actions/checkout@v3
 
-      # 2. Set environment variables based on matrix
+      # 2. Install yq (YAML → JSON conversion)
+      - name: Install yq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y yq jq curl
+
+      # 3. Set environment variables based on matrix
       - name: Set Environment Variables
         run: |
           if [ "${{ matrix.env }}" = "DEV" ]; then
@@ -53,29 +59,36 @@ jobs:
           echo "JWT_AUDIENCE=$JWT_AUDIENCE" >> $GITHUB_ENV
           echo "ENV=${{ matrix.env }}" >> $GITHUB_ENV
 
-      # 3. Process each spec
+      # 4. Process each spec
       - name: Process API Specs
         run: |
           POSTMAN_API_KEY="${{ secrets.POSTMAN_API_KEY }}"
           WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID }}"
 
+          echo "Workspace ID: $WORKSPACE_ID"
+          echo "Postman API Key length: ${#POSTMAN_API_KEY}"
+
           for SPEC_FILE in specs/*.{yaml,json}; do
             [ -f "$SPEC_FILE" ] || continue
 
-            SPEC_NAME=$(basename "$SPEC_FILE" | sed 's/\.[^.]*$//')  # e.g., payment-refund-api
+            SPEC_NAME=$(basename "$SPEC_FILE" | sed 's/\.[^.]*$//')
             echo "Processing spec: $SPEC_NAME ($SPEC_FILE)"
 
-            # Convert file to a JSON string safely
-            SPEC_CONTENT=$(jq -Rs . < "$SPEC_FILE")
+            # Convert YAML to JSON safely
+            if [[ "$SPEC_FILE" == *.yaml ]]; then
+              SPEC_CONTENT=$(yq -o=json eval "$SPEC_FILE")
+            else
+              SPEC_CONTENT=$(cat "$SPEC_FILE")
+            fi
 
-            # Check if the spec exists (search by name)
+            # Check if the spec exists (safe iteration)
             EXISTING_SPEC_ID=$(curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
               "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
-              | jq -r --arg NAME "$SPEC_NAME" '.specs[] | select(.name==$NAME) | .id')
+              | jq -r --arg NAME "$SPEC_NAME" '.specs // [] | .[] | select(.name==$NAME) | .id')
 
             if [ -z "$EXISTING_SPEC_ID" ]; then
               echo "Spec not found — creating new spec..."
-              curl -s -X POST "https://api.getpostman.com/specs" \
+              RESPONSE=$(curl -s -w "%{http_code}" -o response.json -X POST "https://api.getpostman.com/specs" \
                 -H "X-Api-Key: $POSTMAN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
@@ -87,10 +100,10 @@ jobs:
                       \"workspace\": {
                         \"id\": \"$WORKSPACE_ID\"
                       }
-                    }"
+                    }")
             else
               echo "Spec exists — updating spec $EXISTING_SPEC_ID..."
-              curl -s -X PUT "https://api.getpostman.com/specs/$EXISTING_SPEC_ID" \
+              RESPONSE=$(curl -s -w "%{http_code}" -o response.json -X PUT "https://api.getpostman.com/specs/$EXISTING_SPEC_ID" \
                 -H "X-Api-Key: $POSTMAN_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
@@ -99,24 +112,49 @@ jobs:
                         \"type\": \"openapi3\",
                         \"content\": $SPEC_CONTENT
                       }
-                    }"
+                    }")
             fi
 
-            # 4. Generate collection from spec
-            SPEC_ID="${EXISTING_SPEC_ID:-$(curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
-                        "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
-                        | jq -r --arg NAME "$SPEC_NAME" '.specs[] | select(.name==$NAME) | .id')}"
+            STATUS=$(tail -n1 <<< "$RESPONSE")
+            if [ "$STATUS" -ge 400 ]; then
+              echo "Error creating/updating spec:"
+              cat response.json
+              exit 1
+            fi
 
+            # Fetch Spec ID again (in case newly created)
+            SPEC_ID=$(curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
+                        "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
+                        | jq -r --arg NAME "$SPEC_NAME" '.specs // [] | .[] | select(.name==$NAME) | .id')
+
+            if [ -z "$SPEC_ID" ]; then
+              echo "Spec ID not found after creation — skipping collection generation."
+              continue
+            fi
+
+            # Generate collection from spec
             echo "Regenerating collection from spec $SPEC_ID..."
-            curl -s -X POST "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
+            RESPONSE=$(curl -s -w "%{http_code}" -o response.json -X POST "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
               -H "X-Api-Key: $POSTMAN_API_KEY" \
               -H "Content-Type: application/json" \
-              -d '{"options": {"overwrite": true, "requestParametersResolution": "example"}}'
+              -d '{"options": {"overwrite": true, "requestParametersResolution": "example"}}')
 
-            # 5. Inject JWT pre-request script
+            STATUS=$(tail -n1 <<< "$RESPONSE")
+            if [ "$STATUS" -ge 400 ]; then
+              echo "Error generating collection:"
+              cat response.json
+              continue
+            fi
+
+            # Inject JWT pre-request script
             COLLECTION_ID=$(curl -s -H "X-Api-Key: $POSTMAN_API_KEY" \
               "https://api.getpostman.com/collections?workspace=$WORKSPACE_ID" \
-              | jq -r --arg NAME "$SPEC_NAME" '.collections[] | select(.name==$NAME) | .uid')
+              | jq -r --arg NAME "$SPEC_NAME" '.collections // [] | .[] | select(.name==$NAME) | .uid')
+
+            if [ -z "$COLLECTION_ID" ]; then
+              echo "Collection ID not found — skipping JWT injection."
+              continue
+            fi
 
             echo "Injecting JWT pre-request script into collection $COLLECTION_ID..."
             curl -s -X PUT "https://api.getpostman.com/collections/$COLLECTION_ID" \
