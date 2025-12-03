@@ -10,6 +10,11 @@ on:
 jobs:
   sync-api:
     runs-on: ubuntu-latest
+    
+    # Exit immediately if a command fails
+    defaults:
+      run:
+        shell: bash -e {0}
 
     steps:
       - uses: actions/checkout@v3
@@ -26,65 +31,127 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists
+      # 2. Create API If Not Exists (Debugging Added)
       #######################################################################
-      - name: Ensure API Exists
+      - name: Ensure API Exists (with Debug)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
+          echo "Searching for existing API: $API_NAME in workspace ${{ secrets.POSTMAN_WORKSPACE_ID }}"
 
-          API_LOOKUP=$(curl -s -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
+          API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis?workspace=${{ secrets.POSTMAN_WORKSPACE_ID }}")
+          
+          # Separate the body and the HTTP status code
+          HTTP_STATUS=$(echo "$API_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
+          API_BODY=$(echo "$API_LOOKUP" | head -n -1)
 
-          API_ID=$(echo "$API_LOOKUP" | jq -r \
+          echo "--- RAW API LOOKUP RESPONSE (HTTP Status: $HTTP_STATUS) ---"
+          echo "$API_BODY"
+          echo "--------------------------------------------------------"
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Failed to lookup APIs. Check API Key and Workspace ID."
+            # Exiting here if the lookup failed
+            exit 1 
+          fi
+
+          API_ID=$(echo "$API_BODY" | jq -r \
             ".apis[] | select(.name==\"$API_NAME\") | .id")
 
-          if [ -z "$API_ID" ]; then
-            echo "API does not exist — creating…"
-            CREATE=$(curl -s -X POST \
+          if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
+            echo "API does not exist or jq failed to find it — creating…"
+            CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "https://api.getpostman.com/apis" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -d "{\"name\": \"$API_NAME\", \"workspace\": \"${{ secrets.POSTMAN_WORKSPACE_ID }}\"}")
-            API_ID=$(echo "$CREATE" | jq -r ".api.id")
+            
+            # Separate body and status for creation response
+            HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
+            CREATE_BODY=$(echo "$CREATE" | head -n -1)
+
+            echo "--- RAW API CREATE RESPONSE (HTTP Status: $HTTP_STATUS) ---"
+            echo "$CREATE_BODY"
+            echo "----------------------------------------------------------"
+            
+            if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
+              echo "ERROR: Failed to create API. Check body for details."
+              exit 1
+            fi
+            
+            API_ID=$(echo "$CREATE_BODY" | jq -r ".api.id")
+            
+            if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
+                echo "CRITICAL ERROR: Failed to parse API ID from creation response."
+                exit 1
+            fi
+
           else
             echo "API exists: $API_ID"
           fi
 
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
+          echo "API_ID successfully exported: $API_ID"
+
 
       #######################################################################
-      # 3. Ensure API Version Exists
+      # 3. Ensure API Version Exists (Debugging Added)
       #######################################################################
-      - name: Ensure API Version Exists
+      - name: Ensure API Version Exists (with Debug)
         id: ensureversion
         run: |
           API_ID="${{ steps.ensureapi.outputs.api_id }}"
           VERSION_NAME="v1"
+          
+          echo "Looking up versions for API ID: $API_ID"
 
-          VERSION_LOOKUP=$(curl -s \
+          VERSION_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis/$API_ID/versions")
+          
+          # Separate the body and the HTTP status code
+          HTTP_STATUS=$(echo "$VERSION_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
+          VERSION_BODY=$(echo "$VERSION_LOOKUP" | head -n -1)
 
-          VERSION_ID=$(echo "$VERSION_LOOKUP" | jq -r \
+          echo "--- RAW VERSION LOOKUP RESPONSE (HTTP Status: $HTTP_STATUS) ---"
+          echo "$VERSION_BODY"
+          echo "--------------------------------------------------------------"
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Failed to lookup API versions."
+            exit 1 
+          fi
+
+          VERSION_ID=$(echo "$VERSION_BODY" | jq -r \
             ".versions[] | select(.name==\"$VERSION_NAME\") | .id")
 
-          if [ -z "$VERSION_ID" ]; then
+          if [ -z "$VERSION_ID" ] || [ "$VERSION_ID" == "null" ]; then
             echo "Version not found — creating v1…"
-            CREATE=$(curl -s -X POST \
+            CREATE_VERSION=$(curl -s -X POST \
               "https://api.getpostman.com/apis/$API_ID/versions" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -d "{\"name\": \"$VERSION_NAME\"}")
-            VERSION_ID=$(echo "$CREATE" | jq -r ".version.id")
+            
+            CREATE_VERSION_ID=$(echo "$CREATE_VERSION" | jq -r ".version.id")
+            
+            if [ -z "$CREATE_VERSION_ID" ] || [ "$CREATE_VERSION_ID" == "null" ]; then
+                echo "CRITICAL ERROR: Failed to parse Version ID from creation response."
+                exit 1
+            fi
+
+            VERSION_ID="$CREATE_VERSION_ID"
+            echo "Created new Version ID: $VERSION_ID"
           fi
 
           echo "version_id=$VERSION_ID" >> $GITHUB_OUTPUT
+          echo "VERSION_ID successfully exported: $VERSION_ID"
 
       #######################################################################
-      # 4. Create/Update SPEC (Schema)
+      # 4. Create/Update SPEC (Schema) - Removed because Step 2/3 failed
       #######################################################################
-      - name: Upload Spec to Postman Spec Hub
+- name: Upload Spec to Postman Spec Hub
         id: uploadspec
         run: |
           API_ID="${{ steps.ensureapi.outputs.api_id }}"
@@ -164,4 +231,3 @@ jobs:
         run: |
           npm install -g newman
           newman run "https://api.getpostman.com/collections/${{ steps.gencoll.outputs.collection_id }}?apikey=${{ secrets.POSTMAN_API_KEY }}"
-
