@@ -26,12 +26,13 @@ jobs:
         id: loadspec
         run: |
           FILE=$(ls specs/payment-refund-api-openapi.*)
+          # Use sed to escape quotes and escape newlines (required for inline JSON schema upload)
           CONTENTS=$(sed 's/"/\\"/g' "$FILE" | sed ':a;N;$!ba;s/\n/\\n/g')
           echo "contents=$CONTENTS" >> $GITHUB_OUTPUT
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (Debugging Added)
+      # 2. Create API If Not Exists (with Debugging)
       #######################################################################
       - name: Ensure API Exists (with Debug)
         id: ensureapi
@@ -39,6 +40,7 @@ jobs:
           API_NAME="Payment Refund API"
           echo "Searching for existing API: $API_NAME in workspace ${{ secrets.POSTMAN_WORKSPACE_ID }}"
 
+          # Use -w "\nHTTP_STATUS:%{http_code}" to capture the status code
           API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis?workspace=${{ secrets.POSTMAN_WORKSPACE_ID }}")
           
@@ -51,16 +53,18 @@ jobs:
           echo "--------------------------------------------------------"
 
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Failed to lookup APIs. Check API Key and Workspace ID."
-            # Exiting here if the lookup failed
+            echo "ERROR: Failed to lookup APIs (HTTP $HTTP_STATUS). Check API Key and Workspace ID."
             exit 1 
           fi
 
+          # Look for API ID
           API_ID=$(echo "$API_BODY" | jq -r \
             ".apis[] | select(.name==\"$API_NAME\") | .id")
 
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist or jq failed to find it — creating…"
+            
+            # API Creation Call
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "https://api.getpostman.com/apis" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
@@ -76,7 +80,7 @@ jobs:
             echo "----------------------------------------------------------"
             
             if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
-              echo "ERROR: Failed to create API. Check body for details."
+              echo "ERROR: Failed to create API (HTTP $HTTP_STATUS). Check body for details."
               exit 1
             fi
             
@@ -96,7 +100,7 @@ jobs:
 
 
       #######################################################################
-      # 3. Ensure API Version Exists (Debugging Added)
+      # 3. Ensure API Version Exists (with Debugging)
       #######################################################################
       - name: Ensure API Version Exists (with Debug)
         id: ensureversion
@@ -119,7 +123,7 @@ jobs:
           echo "--------------------------------------------------------------"
 
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Failed to lookup API versions."
+            echo "ERROR: Failed to lookup API versions (HTTP $HTTP_STATUS)."
             exit 1 
           fi
 
@@ -149,14 +153,14 @@ jobs:
           echo "VERSION_ID successfully exported: $VERSION_ID"
 
       #######################################################################
-      # 4. Create/Update SPEC (Schema) - Removed because Step 2/3 failed
+      # 4. Create/Update SPEC (Schema)
       #######################################################################
-- name: Upload Spec to Postman Spec Hub
+      - name: Upload Spec to Postman Spec Hub
         id: uploadspec
         run: |
           API_ID="${{ steps.ensureapi.outputs.api_id }}"
           VERSION_ID="${{ steps.ensureversion.outputs.version_id }}"
-          CONTENTS="${{ steps.loadspe.outputs.contents }}"
+          CONTENTS="${{ steps.loadspec.outputs.contents }}"
 
           # Create or update schema
           CREATE_SCHEMA=$(curl -s -X POST \
