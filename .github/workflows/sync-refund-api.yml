@@ -85,7 +85,7 @@ jobs:
 
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (Final Attempt)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (Verbose Logging)
       #######################################################################
       - name: Install, Publish Spec via Postman CLI
         id: postman_import
@@ -99,7 +99,7 @@ jobs:
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
 
           # Export required variables to the shell environment for robust execution
-          export POSTMAN_API_GOVERNANCE_RULESETS_SKIP=true # CRITICAL: Bypasses governance check
+          export POSTMAN_API_GOVERNANCE_RULESETS_SKIP=true
           export POSTMAN_API_KEY="$API_KEY"
           export POSTMAN_WORKSPACE_ID="$WORKSPACE_ID"
 
@@ -109,9 +109,9 @@ jobs:
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # Command now relies on exported environment variables
+          # CRITICAL CHANGE: Added --verbose flag to capture detailed error info.
           OUTPUT=$(npm exec postman -- api publish "$FILE" \
-            --name "$API_NAME") 
+            --name "$API_NAME" --verbose) 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
