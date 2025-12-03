@@ -32,9 +32,9 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FINAL ROBUST FIX)
+      # 2. Create API If Not Exists (FINAL ROBUST FIX with printf)
       #######################################################################
-      - name: Ensure API Exists (Final Robust Fix)
+      - name: Ensure API Exists (Final Robust Fix with printf)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
@@ -64,26 +64,13 @@ jobs:
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist — creating…"
             
-            # --- CRITICAL FIX: Write Payload to File (JSON content is flush left) ---
-            # Using <<- EOF correctly closes the heredoc by trimming leading tabs.
-            cat <<- EOF > api_payload.json
-{
-"data": {
-"type": "api",
-"attributes": {
-"name": "$API_NAME"
-},
-"relationships": {
-"workspace": {
-"data": {
-"id": "$WORKSPACE_ID",
-"type": "workspace"
-}
-}
-}
-}
-}
-EOF
+            # --- CRITICAL FIX: Use printf to write the complex JSON payload ---
+            # This method generates the file in one command, avoiding multi-line EOF and quoting issues.
+            printf '{"data":{"type":"api","attributes":{"name":"%s"},"relationships":{"workspace":{"data":{"id":"%s","type":"workspace"}}}}}' \
+              "$API_NAME" \
+              "$WORKSPACE_ID" \
+              > api_payload.json
+            
             echo "Successfully wrote complex JSON payload to api_payload.json."
             # --- END CRITICAL FIX ---
 
