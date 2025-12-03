@@ -52,7 +52,7 @@ jobs:
           echo "File encoding sanitized."
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN CLI (Fixing EACCES)
+      # 2. PUBLISH SPEC via POSTMAN CLI (Fixing 'unknown command' error)
       #######################################################################
       - name: Publish Spec via Postman CLI
         id: postman_import
@@ -61,36 +61,48 @@ jobs:
           WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
           FILE="${{ steps.loadspec.outputs.specfile }}"
           
-          # CRITICAL FIX: Use sudo to grant permission for global install
+          # Install Postman CLI
           sudo npm install -g postman-cli
           
-          echo "Using Postman CLI to import spec to API ID: $API_ID"
+          echo "Using Postman CLI to push spec to API ID: $API_ID"
           
           # Use a timestamped version name
           VERSION_NAME="v2.1.0-build-$(date +%Y%m%d%H%M%S)"
 
-          # CRITICAL STEP: Use the CLI command to sync the spec. 
-          CLI_OUTPUT=$(postman api import "$FILE" \
+          # CRITICAL FIX: Change 'import' to the correct subcommand 'push'
+          # We also add '--force' to ensure the collection/definition is updated.
+          CLI_OUTPUT=$(postman api push "$FILE" \
             --base-api-id "$API_ID" \
             --base-api-version "$VERSION_NAME" \
             --workspace-id "$WORKSPACE_ID" \
-            --postman-api-key ${{ secrets.POSTMAN_API_KEY }})
+            --postman-api-key ${{ secrets.POSTMAN_API_KEY }} \
+            --force)
 
           echo "Postman CLI Output:"
-          echo "$CLI_OUTPUT"
+          echo "$CLI_OUTPUT" 
 
           # Parse the output to get the created Collection ID
-          # The CLI output contains a line like: "Successfully imported to collection [Collection Name] (ID)"
+          # The CLI output contains a line confirming the collection ID.
           COLLECTION_ID=$(echo "$CLI_OUTPUT" | grep "collection" | tail -1 | awk '{print $NF}' | tr -d '[:punct:]')
           
           if [ -z "$COLLECTION_ID" ]; then
-             echo "CRITICAL ERROR: Failed to parse Collection ID from Postman CLI output. Check CLI log above."
-             exit 1
+             echo "ATTEMPTING SECONDARY PARSE: Looking for API Version ID..."
+             # Secondary attempt: Look for API Version ID, which the CLI definitely returns
+             API_VERSION_ID=$(echo "$CLI_OUTPUT" | grep "API Version" | tail -1 | awk '{print $NF}' | tr -d '[:punct:]')
+             
+             if [ -n "$API_VERSION_ID" ]; then
+                echo "SUCCESS: API Version ID '$API_VERSION_ID' created. However, cannot reliably get Collection ID from CLI output."
+                # We stop here because the next steps rely on the Collection ID for the JWT injection.
+                echo "CRITICAL ERROR: Failed to parse Collection ID from Postman CLI output. Please check the CLI log above."
+                exit 1
+             else
+                echo "CRITICAL ERROR: Failed to parse Collection ID or API Version ID from Postman CLI output. Check CLI log above."
+                exit 1
+             fi
           fi
 
           echo "Successfully created and linked Collection ID: $COLLECTION_ID"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
-          
 
       #######################################################################
       # 3. Attach JWT Pre-request Script (Collection Update)
