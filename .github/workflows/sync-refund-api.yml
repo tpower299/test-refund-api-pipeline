@@ -18,13 +18,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-node@v4 # Ensure Node.js is available for the Postman CLI
 
       #######################################################################
-      # 1. Read Spec File and Convert to Base64 String
+      # 1. Read Spec File and Get File Path (Simplified for CLI)
       #######################################################################
-      - name: Load Spec File Path and Encode Content (Base64)
+      - name: Load Spec File Path and Type
         id: loadspec
         run: |
+          # Finds the single spec file regardless of extension
           FILE=$(ls specs/payment-refund-api-openapi.*)
           
           if [[ "$FILE" =~ \.(yaml|yml)$ ]]; then
@@ -36,111 +38,73 @@ jobs:
               exit 1
           fi
 
-          # CRITICAL FIX: Encode the entire file content as a Base64 string.
-          # This guarantees no problematic characters (quotes, backslashes, tabs, etc.) 
-          # are sent to the API, resolving the parsing error.
-          # -w 0 ensures the output is a single, continuous line.
-          CONTENTS_BASE64=$(base64 -w 0 "$FILE")
-          
+          echo "Spec file found: $FILE"
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
-          echo "contents_b64=$CONTENTS_BASE64" >> $GITHUB_OUTPUT
-          
 
       #######################################################################
-      # 2. Upload/Update SPEC directly to Spec Hub (Base64 Payload)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI
+      # This replaces the failed curl steps 2 and 3.
       #######################################################################
-      - name: Upload Spec to Postman Spec Hub (Base64 Payload)
-        id: uploadspec
+      - name: Install and Import Spec via Postman CLI
+        id: postman_import
         run: |
+          # Install the Postman CLI tool globally
+          npm install -g postman-cli
+
           API_NAME="Payment Refund API"
           WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
-          CONTENTS_BASE64="${{ steps.loadspec.outputs.contents_b64 }}"
-          FILE_LANG="${{ steps.loadspec.outputs.file_type }}" 
+          FILE="${{ steps.loadspec.outputs.specfile }}"
 
-          echo "Attempting to upload spec for API: $API_NAME to Spec Hub using Base64 encoding..."
+          echo "Importing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # --- Use printf to construct the JSON payload to a file ---
-          # Payload includes the 'isBase64' flag to instruct Postman to decode the content.
-          printf '{"spec":{"name":"%s","content":"%s","contentType":"%s","isBase64":true}}' \
-            "$API_NAME" \
-            "$CONTENTS_BASE64" \
-            "$FILE_LANG" \
-            > spec_payload.json
+          # The Postman CLI handles the API call, encoding, and collection generation internally.
+          OUTPUT=$(postman api import "$FILE" \
+            --workspace $WORKSPACE_ID \
+            --api-key ${{ secrets.POSTMAN_API_KEY }} \
+            --format yaml) 
 
-          echo "Successfully wrote payload to spec_payload.json (Base64)."
+          echo "--- POSTMAN CLI RAW OUTPUT ---"
+          echo "$OUTPUT"
+          echo "------------------------------"
 
-          # --- POST request using application/json content type ---
-          CREATE_SPEC=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
-            "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            --data @spec_payload.json)
+          # Use jq to safely parse the required IDs from the complex CLI output structure.
+          # The CLI is expected to create an API, a Version, and a linked Collection.
+          
+          # 1. Get the Collection ID created by the import process
+          COLLECTION_ID=$(echo "$OUTPUT" | jq -r '
+            .api.versions[0].collections[] | select(.type=="collection") | .id
+          ')
+          
+          # 2. Get the Spec ID created by the import process
+          SPEC_ID=$(echo "$OUTPUT" | jq -r '.api.versions[0].specs[] | .id')
 
-          HTTP_STATUS=$(echo "$CREATE_SPEC" | tail -n 1 | awk -F: '{print $2}')
-          SPEC_BODY=$(echo "$CREATE_SPEC" | head -n -1)
-
-          echo "--- RAW SPEC UPLOAD RESPONSE (HTTP Status: $HTTP_STATUS) ---"
-          echo "$SPEC_BODY"
-          echo "------------------------------------------------------------"
-
-          if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
-              echo "ERROR: Failed to upload Spec (HTTP $HTTP_STATUS). Check body for details."
-              exit 1
+          if [ -z "$COLLECTION_ID" ] || [ "$COLLECTION_ID" == "null" ]; then
+             echo "CRITICAL ERROR: Failed to find generated COLLECTION ID in Postman CLI output."
+             exit 1
+          fi
+          
+          if [ -z "$SPEC_ID" ] || [ "$SPEC_ID" == "null" ]; then
+             echo "CRITICAL ERROR: Failed to find created SPEC ID in Postman CLI output."
+             exit 1
           fi
 
-          SPEC_ID=$(echo "$SPEC_BODY" | jq -r ".spec.id")
-          
-          if [ -z "$SPEC_ID" ] || [ "$SPEC_ID" == "null" ]; then 
-            echo "CRITICAL ERROR: Failed to parse SPEC ID from creation response."
-            exit 1 
-          fi
-
-          echo "Spec ID successfully created/updated: $SPEC_ID"
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
-          
-      #######################################################################
-      # 3. Generate Collection from Spec 
-      #######################################################################
-      - name: Generate Collection from Spec
-        id: gencoll
-        run: |
-          SPEC_ID="${{ steps.uploadspec.outputs.spec_id }}"
-          
-          echo "Generating collection from Spec ID: $SPEC_ID"
-
-          GEN=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
-            "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{"options": {"requestParametersResolution": "example", "exampleParametersResolution": "example"}}') 
-
-          HTTP_STATUS=$(echo "$GEN" | tail -n 1 | awk -F: '{print $2}')
-          GEN_BODY=$(echo "$GEN" | head -n -1)
-
-          echo "--- RAW GENERATION RESPONSE (HTTP Status: $HTTP_STATUS) ---"
-          echo "$GEN_BODY"
-          echo "----------------------------------------------------------"
-
-          if [ "$HTTP_STATUS" != "200" ]; then
-              echo "ERROR: Collection generation failed (HTTP $HTTP_STATUS)."
-              exit 1
-          fi
-
-          COLLECTION_ID=$(echo "$GEN_BODY" | jq -r ".collection.id")
-
-          echo "Collection successfully generated: $COLLECTION_ID"
+          echo "Spec ID created: $SPEC_ID"
+          echo "Collection ID generated by CLI: $COLLECTION_ID"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 4. Attach JWT Pre-request Script (Collection Update)
+      # 3. Attach JWT Pre-request Script (Collection Update)
       #######################################################################
       - name: Inject JWT Script
         run: |
-          COLLECTION_ID="${{ steps.gencoll.outputs.collection_id }}"
+          COLLECTION_ID="${{ steps.postman_import.outputs.collection_id }}"
 
           echo "Injecting JWT pre-request script into collection $COLLECTION_ID"
           
+          # This CURL command remains necessary as the Postman CLI does not offer 
+          # a command for modifying collection events/scripts directly.
           curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
@@ -169,11 +133,11 @@ jobs:
                 }"
 
       #######################################################################
-      # 5. (Optional) Run Tests Using Newman
+      # 4. (Optional) Run Tests Using Newman
       #######################################################################
       - name: Run Tests
         run: |
-          COLLECTION_ID="${{ steps.gencoll.outputs.collection_id }}"
+          COLLECTION_ID="${{ steps.postman_import.outputs.collection_id }}"
 
           npm install -g newman
           echo "Running Newman tests on generated collection $COLLECTION_ID..."
