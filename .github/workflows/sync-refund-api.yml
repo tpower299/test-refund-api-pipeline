@@ -36,10 +36,8 @@ jobs:
               exit 1
           fi
 
-          # CRITICAL FIX: Use jq to read the file content and apply perfect JSON string escaping.
-          # This resolves the "Invalid character 't'" error which was caused by insufficient escaping
-          # of the spec content before nesting it inside the upload JSON body.
-          # -R: Read as raw string, -s: Slurp all inputs, '.': Output the raw string.
+          # CRITICAL: Use jq to read the file content and apply perfect JSON string escaping.
+          # This process correctly handles all quotes, newlines, and backslashes in the YAML/JSON file.
           CONTENTS=$(jq -Rs '.' "$FILE")
           
           # Remove the outer quotes that jq adds to the string.
@@ -48,37 +46,35 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
           echo "contents=$CONTENTS" >> $GITHUB_OUTPUT
-          
 
       #######################################################################
-      # 2. Upload/Update SPEC directly to Spec Hub (Revert to application/json)
+      # 2. Upload/Update SPEC directly to Spec Hub (Minimalist Payload)
       #######################################################################
-      - name: Upload Spec to Postman Spec Hub (JSON Payload)
+      - name: Upload Spec to Postman Spec Hub (Minimalist Payload)
         id: uploadspec
         run: |
           API_NAME="Payment Refund API"
           WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
           CONTENTS="${{ steps.loadspec.outputs.contents }}"
-          FILE_LANG="${{ steps.loadspec.outputs.file_type }}" 
+          # FILE_LANG is intentionally omitted from the payload to avoid parsing conflict.
 
           echo "Attempting to upload spec for API: $API_NAME to Spec Hub..."
 
           # --- Use printf to construct the JSON payload to a file ---
-          # This uses the perfectly escaped CONTENTS variable.
-          printf '{"spec":{"name":"%s","content":"%s","contentType":"%s"}}' \
+          # Payload now contains only 'name' and 'content'.
+          printf '{"spec":{"name":"%s","content":"%s"}}' \
             "$API_NAME" \
             "$CONTENTS" \
-            "$FILE_LANG" \
             > spec_payload.json
 
-          echo "Successfully wrote payload to spec_payload.json."
+          echo "Successfully wrote payload to spec_payload.json (Minimalist)."
 
-          # --- POST request using application/json content type (required by Postman) ---
+          # --- POST request using application/json content type ---
           CREATE_SPEC=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            --data @spec_payload.json) # <-- Read body from the file
+            --data @spec_payload.json)
 
           HTTP_STATUS=$(echo "$CREATE_SPEC" | tail -n 1 | awk -F: '{print $2}')
           SPEC_BODY=$(echo "$CREATE_SPEC" | head -n -1)
