@@ -43,7 +43,41 @@ jobs:
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (WITH LINT CHECK)
+      # DIAGNOSTIC CHECK: Validate API Key has access to Workspace ID
+      # This step checks authentication BEFORE the Postman CLI command runs.
+      #######################################################################
+      - name: Validate Workspace Access
+        id: workspace_check
+        run: |
+          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785"
+          API_KEY="${{ secrets.POSTMAN_API_KEY }}"
+
+          echo "Attempting to retrieve Workspace ID: $WORKSPACE_ID"
+
+          RESPONSE=$(curl -s -X GET \
+            "https://api.getpostman.com/workspaces/$WORKSPACE_ID" \
+            -H "X-Api-Key: $API_KEY")
+
+          # Check if the response contains an error message, which Postman returns as JSON
+          ERROR_MESSAGE=$(echo "$RESPONSE" | jq -r '.error.message')
+          
+          if [ -n "$ERROR_MESSAGE" ] && [ "$ERROR_MESSAGE" != "null" ]; then
+            echo "--- WORKSPACE ACCESS ERROR ---"
+            echo "The API Key does NOT have access to Workspace ID: $WORKSPACE_ID."
+            echo "Postman API Response: $ERROR_MESSAGE"
+            echo "ACTION REQUIRED: Ensure your API Key is an admin key and has permission for this workspace."
+            exit 1
+          else
+            # Extract and confirm the workspace name if successful
+            WORKSPACE_NAME=$(echo "$RESPONSE" | jq -r '.workspace.name')
+            echo "SUCCESS: API Key successfully authenticated and retrieved workspace: $WORKSPACE_NAME"
+            echo "---"
+            echo "Continuing to publish step..."
+          fi
+
+
+      #######################################################################
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL, CLEAN COMMAND)
       #######################################################################
       - name: Install, Lint, and Publish Spec via Postman CLI
         id: postman_import
@@ -58,20 +92,19 @@ jobs:
 
           echo "--- Running Spec Lint Check ---"
           # LINT CHECK: Ensures file content is valid before trying to publish.
-          # If this fails, the error is in the YAML/JSON file structure.
           npx postman spec lint "$FILE" 
           echo "--- Lint Check Complete ---"
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # COMMAND: Now syntactically correct: file path is positional, authentication and workspace 
-          # IDs are passed via environment variables (POSTMAN_API_KEY and POSTMAN_WORKSPACE_ID).
+          # COMMAND: The most reliable CLI command syntax: file path positional, IDs via ENV VARS.
           OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npx postman api publish "$FILE" \
             --name "$API_NAME") 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
           echo "------------------------------"
+          
           
           # The 'api publish' command should return details about the API version created.
           
@@ -87,7 +120,6 @@ jobs:
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
           
           # Note: The CLI handles the Spec and Collection creation, but we need the COLLECTION ID for the next steps.
-          # We use a safe CURL command to fetch the collection linked to this new API version.
           
           # 2. Fetch the latest API Version ID from the output
           API_VERSION_ID=$(echo "$OUTPUT" | jq -r '.api.versions[0].id')
