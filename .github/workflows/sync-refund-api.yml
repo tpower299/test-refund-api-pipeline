@@ -1,4 +1,4 @@
-name: Sync API Spec → Generate Collection using Spec Hub
+name: Sync API Spec → Generate Collection from Spec Hub
 
 on:
   push:
@@ -11,7 +11,6 @@ jobs:
   sync-api:
     runs-on: ubuntu-latest
     
-    # Exit immediately if a command fails
     defaults:
       run:
         shell: bash -e {0}
@@ -42,7 +41,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (JQ RAWFILE FIX)
+      # 3. CREATE SPEC IN SPEC HUB (Final Fix)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -51,16 +50,24 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Constructing JSON payload using jq --rawfile..."
-
-          # CRITICAL FIX: Use jq --rawfile to safely embed the spec content, 
-          # handling all internal JSON escaping automatically.
+          echo "Constructing JSON payload with 'files' array structure..."
+          
+          # CRITICAL FIX: Use jq --rawfile and the structure provided by the professor.
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
-            '{spec: $spec_content, name: "Payment Refund API", type: "openapi" }')
+            '{
+              name: "Payment Refund API",
+              type: "openapi3",
+              files: [
+                {
+                  path: "index.yaml",
+                  content: $spec_content
+                }
+              ]
+            }')
 
-          echo "Sending payload via application/json..."
-
+          echo "Sending payload to POST /specs..."
+          
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -72,11 +79,11 @@ jobs:
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
 
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
-            echo "CRITICAL ERROR: Failed to extract SPEC_ID from response."
+            echo "CRITICAL ERROR: Failed to create spec. Check response above."
             exit 1
           fi
 
-          echo "Created Spec ID: $SPEC_ID"
+          echo "SUCCESS: Created Spec ID: $SPEC_ID"
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
@@ -88,7 +95,7 @@ jobs:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           SPEC_ID: ${{ steps.create_spec.outputs.spec_id }}
         run: |
-          echo "Generating collection…"
+          echo "Generating collection from Spec ID $SPEC_ID…"
 
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
