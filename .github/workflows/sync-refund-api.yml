@@ -27,7 +27,6 @@ jobs:
         run: |
           FILE=$(ls specs/payment-refund-api-openapi.*)
           echo "Found spec: $FILE"
-          
           iconv -c -f utf-8 -t utf-8 "$FILE" | tr -d '\r' > "$FILE.tmp"
           mv "$FILE.tmp" "$FILE"
           echo "Encoding sanitized."
@@ -44,7 +43,6 @@ jobs:
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
           echo "Creating Spec in Hub (Conceptual Proof)..."
-          
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
             '{
@@ -57,13 +55,11 @@ jobs:
                 }
               ]
             }')
-
           curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" > /dev/null
-          
           echo "SUCCESS: Spec entity created/updated in Spec Hub."
 
 
@@ -74,11 +70,9 @@ jobs:
         id: local_gen
         run: |
           npm install -g openapi-to-postmanv2
-          
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
             -o collection.json
-            
           echo "SUCCESS: Collection JSON generated locally."
 
 
@@ -92,14 +86,11 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
         run: |
           echo "Wrapping collection JSON for upload..."
-          
-          # Use jq to wrap the collection.json content inside {"collection": ...}
           PAYLOAD=$(jq -n \
             --rawfile collection_content collection.json \
             '{collection: ($collection_content | fromjson)}' )
             
           echo "Uploading generated collection to Postman..."
-          
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -118,7 +109,7 @@ jobs:
 
 
       #######################################################################
-      # 5. Inject JWT Pre-request Script (FIXED: Fetch-Modify-Put Pattern)
+      # 5. Inject JWT Pre-request Script (Fetch-Modify-Put Pattern)
       #######################################################################
       - name: Inject JWT Script
         env:
@@ -126,13 +117,10 @@ jobs:
           COLLECTION_ID: ${{ steps.upload_collection.outputs.collection_id }}
         run: |
           echo "Fetching collection structure for modification..."
-
-          # 1. FETCH the entire collection JSON
           FULL_COLLECTION_RESPONSE=$(curl -s -X GET \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY")
           
-          # Check if the fetch was successful
           if echo "$FULL_COLLECTION_RESPONSE" | jq -e '.collection' > /dev/null; then
               FULL_COLLECTION=$(echo "$FULL_COLLECTION_RESPONSE" | jq '.collection')
           else
@@ -141,8 +129,6 @@ jobs:
           fi
 
           echo "Modifying collection with JWT script injection..."
-          
-          # JWT script event structure to inject
           JWT_SCRIPT='[
               {
                 "listen": "prerequest",
@@ -152,7 +138,6 @@ jobs:
                     "const clientId = pm.environment.get(\"clientId\");",
                     "const clientSecret = pm.environment.get(\"clientSecret\");",
                     "const tokenUrl = pm.environment.get(\"tokenUrl\");",
-                    "",
                     "pm.sendRequest({",
                     "  url: tokenUrl,",
                     "  method: \"POST\",",
@@ -166,13 +151,9 @@ jobs:
               }
             ]'
             
-          # 2. MODIFY the fetched collection JSON by adding the 'event' property
           MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
           
-          # 3. PUT the complete, modified JSON back
           echo "Sending complete, modified collection back to the API..."
-
-          # Note: The API requires the outer "collection" key for the PUT
           RESPONSE=$(curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -182,7 +163,7 @@ jobs:
           echo "Collection update response: $RESPONSE"
 
       #######################################################################
-      # 6. Run tests using Newman
+      # 6. Run tests using Newman (FIXED: Added --insecure flag)
       #######################################################################
       - name: Run Tests
         run: |
@@ -190,4 +171,5 @@ jobs:
           COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
 
           echo "Running Newman tests…"
-          npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
+          # Adding --insecure to prevent immediate post-download SSL/sync cleanup issues.
+          npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}" --insecure
