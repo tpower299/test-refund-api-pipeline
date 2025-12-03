@@ -71,7 +71,7 @@ jobs:
           echo "specname=$SPEC_NAME" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. UPSERT SPEC (With Verbose Logging & Error Handling)
+      # 2. UPSERT SPEC (Zombie-Proof Logic)
       #######################################################################
       - name: Upsert Spec in Spec Hub
         id: create_spec
@@ -79,51 +79,56 @@ jobs:
           SPEC_NAME="${{ steps.spec.outputs.specname }}"
           FILE="${{ steps.spec.outputs.specfile }}"
           
-          echo "🔎 Looking for existing spec named: '$SPEC_NAME' in Workspace..."
+          echo "🔎 Looking for existing spec named: '$SPEC_NAME'..."
           
-          # 1. Fetch all specs in the workspace
+          # 1. Fetch all specs
           LIST_RESPONSE=$(curl -s -X GET "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY")
             
-          # 2. Check for Duplicates (Debug Info)
-          COUNT=$(echo "$LIST_RESPONSE" | jq --arg name "$SPEC_NAME" '[.specs[] | select(.name == $name)] | length')
-          if [ "$COUNT" -gt "1" ]; then
-            echo "::warning::Found $COUNT specs with the name '$SPEC_NAME'. This script will update the first one found."
-          fi
-
-          # 3. Find ID of existing spec (if any)
-          EXISTING_ID=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.specs[] | select(.name == $name) | .id' | head -n 1)
-
-          # 4. Prepare Payload
+          # 2. Get ALL matching IDs (not just the first one)
+          MATCHING_IDS=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.specs[] | select(.name == $name) | .id')
+          
+          # 3. Prepare Payload
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE" \
             --arg name "$SPEC_NAME" \
             '{ name: $name, type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
 
-          if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "null" ]; then
-            echo "✅ MATCH FOUND! Updating Spec ID: $EXISTING_ID"
-            
-            # PERFORM UPDATE (PUT) - WITH LOGGING
-            HTTP_CODE=$(curl -s -X PUT \
-              "https://api.getpostman.com/specs/$EXISTING_ID" \
-              -H "X-Api-Key: $POSTMAN_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              -o response.json \
-              -w "%{http_code}")
+          UPDATED_SUCCESSFULLY=false
+          FINAL_SPEC_ID=""
+
+          # 4. Iterative Update Attempt (Handles Zombies)
+          if [ -n "$MATCHING_IDS" ]; then
+            for ID in $MATCHING_IDS; do
+              echo "Attempting to update ID: $ID"
               
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "::error::Failed to update spec. Status: $HTTP_CODE"
-              cat response.json
-              exit 1
-            fi
+              HTTP_CODE=$(curl -s -X PUT \
+                "https://api.getpostman.com/specs/$ID" \
+                -H "X-Api-Key: $POSTMAN_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD" \
+                -o response.json \
+                -w "%{http_code}")
+                
+              if [ "$HTTP_CODE" == "200" ]; then
+                echo "✅ Success! Updated Spec ID: $ID"
+                UPDATED_SUCCESSFULLY=true
+                FINAL_SPEC_ID=$ID
+                break
+              elif [ "$HTTP_CODE" == "404" ]; then
+                echo "⚠️ Warning: ID $ID returned 404 (Likely a Zombie/Converted Spec). Skipping..."
+              else
+                echo "❌ Error updating ID $ID. Status: $HTTP_CODE"
+              fi
+            done
+          fi
+
+          # 5. Create New if Update Failed (or no matches existed)
+          if [ "$UPDATED_SUCCESSFULLY" = false ]; then
+            echo "------------------------------------------------"
+            echo "No updateable spec found. Creating NEW Spec: '$SPEC_NAME'"
+            echo "------------------------------------------------"
             
-            echo "Spec successfully updated."
-            echo "spec_id=$EXISTING_ID" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ NO MATCH FOUND. Creating NEW Spec: '$SPEC_NAME'"
-            
-            # PERFORM CREATE (POST)
             HTTP_CODE=$(curl -s -X POST \
               "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
               -H "X-Api-Key: $POSTMAN_API_KEY" \
@@ -138,10 +143,11 @@ jobs:
               exit 1
             fi
 
-            NEW_ID=$(cat response.json | jq -r '.spec.id')
-            echo "Spec successfully created. ID: $NEW_ID"
-            echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
+            FINAL_SPEC_ID=$(cat response.json | jq -r '.spec.id')
+            echo "✅ Spec successfully created. ID: $FINAL_SPEC_ID"
           fi
+          
+          echo "spec_id=$FINAL_SPEC_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
       # 3. GENERATE COLLECTION LOCALLY
