@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v4 # Ensure Node.js is available for the Postman CLI
 
       #######################################################################
-      # 1. Read Spec File and Get File Path
+      # 1. Read Spec File and Get File Path (BASH SYNTAX FIX)
       #######################################################################
       - name: Load Spec File Path and Type
         id: loadspec
@@ -29,9 +29,11 @@ jobs:
           # Finds the single spec file regardless of extension
           FILE=$(ls specs/payment-refund-api-openapi.*)
           
+          # CRITICAL FIX: Ensure 'then' is explicitly on the same line or before the command 
+          # for consistent Bash parsing, resolving the 'unexpected token else' error.
           if [[ "$FILE" =~ \.(yaml|yml)$ ]]; then
               LANG="yaml"
-          elif [[ "$FILE" =~ \.json$ ]]; compressible
+          elif [[ "$FILE" =~ \.json$ ]]; then
               LANG="json"
           else
               echo "Error: Unsupported file extension for $FILE"
@@ -44,7 +46,6 @@ jobs:
 
       #######################################################################
       # 1.5 SANITIZE SPEC FILE CONTENT (TO FIX INVISIBLE CHARACTERS)
-      # This step strips non-ASCII/non-standard characters that often corrupt YAML parsing.
       #######################################################################
       - name: Sanitize YAML File Encoding
         run: |
@@ -102,7 +103,7 @@ jobs:
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
 
           echo "--- Running Spec Lint Check ---"
-          # LINT CHECK: Ensures file content is valid.
+          # LINT CHECK: Ensures file content is valid. Using 'npm exec' for reliability.
           npm exec postman -- spec lint "$FILE" 
           echo "--- Lint Check Complete ---"
 
