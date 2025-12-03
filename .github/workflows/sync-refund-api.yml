@@ -49,7 +49,7 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Constructing JSON payload with final type fix: OPENAPI:3.0..."
+          echo "Constructing JSON payload…"
           
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
@@ -64,8 +64,6 @@ jobs:
               ]
             }')
 
-          echo "Sending payload to POST /specs..."
-          
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -85,7 +83,7 @@ jobs:
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
-      # 4. Generate collection from the spec (FIXED: Empty options object)
+      # 4. Generate collection from the spec (FIXED — NO options field)
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -95,12 +93,11 @@ jobs:
         run: |
           echo "Generating collection from Spec ID $SPEC_ID…"
 
-          # FIX: Sending an empty "options" object to satisfy the conflicting API requirement.
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"name": "Payment Refund API", "options": {}}') 
+            -d '{"name": "Payment Refund API"}')
 
           echo "Collection generation response: $RESPONSE"
 
@@ -166,3 +163,4 @@ jobs:
 
           echo "Running Newman tests…"
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
+
