@@ -32,16 +32,16 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FIXED for missing workspaceId in URL)
+      # 2. Create API If Not Exists (FIXED with JSONAPI Payload)
       #######################################################################
-      - name: Ensure API Exists (with Fix)
+      - name: Ensure API Exists (Attempting JSONAPI Payload Fix)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
           WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID }}"
           echo "Searching for existing API: $API_NAME in workspace $WORKSPACE_ID"
 
-          # API Lookup - Workspace ID as query parameter for lookup
+          # API Lookup
           API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID")
           
@@ -63,13 +63,15 @@ jobs:
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist or jq failed to find it — creating…"
             
-            # API Creation Call - Workspace ID moved to URL query parameter and required Accept header added
+            # API Creation Call: 1. Workspace ID in URL. 2. Accept: v10. 3. JSONAPI body structure.
+            CREATE_PAYLOAD='{"data":{"type":"api","attributes":{"name":"'${API_NAME}'"}}}'
+            
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/vnd.api.v10+json" \
-              -d "{\"name\": \"$API_NAME\"}") # Body only contains the name
+              -d "$CREATE_PAYLOAD") 
             
             HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
             CREATE_BODY=$(echo "$CREATE" | head -n -1)
@@ -83,11 +85,16 @@ jobs:
               exit 1
             fi
             
-            API_ID=$(echo "$CREATE_BODY" | jq -r ".api.id")
+            # Try parsing v10 response structure (.data.id) first
+            API_ID=$(echo "$CREATE_BODY" | jq -r ".data.id")
             
             if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-                echo "CRITICAL ERROR: Failed to parse API ID from creation response."
-                exit 1
+                # Fallback to older response structure (.api.id) if v10 parsing fails
+                API_ID=$(echo "$CREATE_BODY" | jq -r ".api.id") 
+                if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
+                    echo "CRITICAL ERROR: Failed to parse API ID from creation response. Exiting."
+                    exit 1
+                fi
             fi
 
           else
