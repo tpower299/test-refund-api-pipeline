@@ -105,23 +105,19 @@ jobs:
           # 2. CREATE API VERSION
           echo "Creating new API Version: $VERSION_NAME..."
           
-          # Use jq to create the API version JSON payload robustly and store it
-          VERSION_PAYLOAD=$(jq -n \
-            --arg name "$VERSION_NAME" \
-            --arg baseId "$API_ID_FINAL" \
-            '{"apiVersion": {"name": $name, "baseVersionId": $baseId}}')
-          
-          # CRITICAL FIX: Use echo for safe debug printout
-          echo "--- DEBUG JSON PAYLOAD ---"
-          echo "$VERSION_PAYLOAD"
-          echo "--------------------------"
-
-          RESPONSE=$(curl -s -X POST \
-            "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
-            -H "X-Api-Key: $API_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/vnd.api.v10+json" \
-            -d "$VERSION_PAYLOAD") # Pass the clean, verified variable
+          # CRITICAL FIX: Re-run piping logic to eliminate shell variable corruption risk
+          RESPONSE=$( \
+            jq -n \
+              --arg name "$VERSION_NAME" \
+              --arg baseId "$API_ID_FINAL" \
+              '{"apiVersion": {"name": $name, "baseVersionId": $baseId}}' | \
+            curl -s -X POST \
+              "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
+              -H "X-Api-Key: $API_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/vnd.api.v10+json" \
+              --data @- \
+          )
 
           API_VERSION_ID=$(echo "$RESPONSE" | jq -r '.apiVersion.id')
           if [ -z "$API_VERSION_ID" ] || [ "$API_VERSION_ID" == "null" ]; then
