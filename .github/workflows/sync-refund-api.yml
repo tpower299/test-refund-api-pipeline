@@ -64,26 +64,26 @@ jobs:
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist — creating…"
             
-            # --- CRITICAL FIX: Write Payload to File ---
+            # --- CRITICAL FIX: Write Payload to File (Using << -EOF to fix syntax) ---
             # Use a here-doc to safely write the complex JSON payload to a temporary file
-            cat << EOF > api_payload.json
-{
-  "data": {
-    "type": "api",
-    "attributes": {
-      "name": "$API_NAME"
-    },
-    "relationships": {
-      "workspace": {
-        "data": {
-          "id": "$WORKSPACE_ID",
-          "type": "workspace"
-        }
-      }
-    }
-  }
-}
-EOF
+            cat <<- EOF > api_payload.json
+            {
+              "data": {
+                "type": "api",
+                "attributes": {
+                  "name": "$API_NAME"
+                },
+                "relationships": {
+                  "workspace": {
+                    "data": {
+                      "id": "$WORKSPACE_ID",
+                      "type": "workspace"
+                    }
+                  }
+                }
+              }
+            }
+            EOF
             echo "Successfully wrote complex JSON payload to api_payload.json."
             # --- END CRITICAL FIX ---
 
