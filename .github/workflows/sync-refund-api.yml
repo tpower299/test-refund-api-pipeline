@@ -85,7 +85,7 @@ jobs:
 
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN REST API (Bypassing Unstable CLI)
+      # 2. PUBLISH SPEC via POSTMAN REST API (FIXED API LIMIT)
       #######################################################################
       - name: Publish Spec via Postman REST API (cURL)
         id: postman_import
@@ -95,20 +95,9 @@ jobs:
           FILE="${{ steps.loadspec.outputs.specfile }}"
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
           
-          # 1. CREATE API (If it exists, this call returns the existing ID)
-          echo "Checking/Creating API '$API_NAME'..."
-          RESPONSE=$(curl -s -X POST \
-            "https://api.getpostman.com/apis?workspaceId=$WORKSPACE_ID" \
-            -H "X-Api-Key: $API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"api\": {\"name\": \"$API_NAME\"}}")
-          
-          API_ID=$(echo "$RESPONSE" | jq -r '.api.id')
-          if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-             echo "CRITICAL ERROR: Failed to get API ID. Response: $RESPONSE"
-             exit 1
-          fi
-          echo "API ID is: $API_ID"
+          # CRITICAL FIX: Hard-code the existing API ID to bypass the "limit reached" error.
+          API_ID="4351c3b1-def3-4d95-9ef5-4ce0dcc42853" 
+          echo "Using existing API ID: $API_ID for '$API_NAME'"
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
 
           # 2. CREATE API VERSION (using a timestamp for a unique version)
