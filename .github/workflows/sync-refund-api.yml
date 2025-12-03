@@ -42,7 +42,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (JSON BODY FIX)
+      # 3. CREATE SPEC IN SPEC HUB (JQ RAWFILE FIX)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -51,19 +51,16 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Reading spec file into memory..."
-          # 1. Read the entire file content into a variable
-          SPEC_CONTENT=$(cat "$FILE_PATH")
+          echo "Constructing JSON payload using jq --rawfile..."
 
-          # 2. Construct the JSON payload with the spec content embedded
-          # This replaces multipart/form-data with application/json
+          # CRITICAL FIX: Use jq --rawfile to safely embed the spec content, 
+          # handling all internal JSON escaping automatically.
           PAYLOAD=$(jq -n \
-            --arg content "$SPEC_CONTENT" \
-            '{"spec": $content, "name": "Payment Refund API", "type": "openapi" }')
+            --rawfile spec_content "$FILE_PATH" \
+            '{spec: $spec_content, name: "Payment Refund API", type: "openapi" }')
 
-          echo "Sending spec content via application/json..."
+          echo "Sending payload via application/json..."
 
-          # 3. Use cURL with application/json header and the JSON payload
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
