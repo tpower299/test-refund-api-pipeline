@@ -41,7 +41,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (Final Fix)
+      # 3. CREATE SPEC IN SPEC HUB (Final Type Fix)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -50,14 +50,14 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Constructing JSON payload with 'files' array structure..."
+          echo "Constructing JSON payload with final type fix: OPENAPI:3.0..."
           
-          # CRITICAL FIX: Use jq --rawfile and the structure provided by the professor.
+          # FINAL FIX: Change the 'type' value to the exact enum required by the API.
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
             '{
               name: "Payment Refund API",
-              type: "openapi3",
+              type: "OPENAPI:3.0",
               files: [
                 {
                   path: "index.yaml",
@@ -79,7 +79,7 @@ jobs:
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
 
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
-            echo "CRITICAL ERROR: Failed to create spec. Check response above."
+            echo "CRITICAL ERROR: Failed to create spec. Final error response: $RESPONSE"
             exit 1
           fi
 
