@@ -83,7 +83,7 @@ jobs:
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
-      # 4. Generate collection from the spec (VALID options required)
+      # 4. Generate collection from the spec (STRICT enterprise-compatible)
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -100,8 +100,8 @@ jobs:
             -d '{
               "name": "Payment Refund API",
               "options": {
-                "requestParametersResolution": "example",
-                "exampleParametersResolution": "example"
+                "requestParametersResolution": "schema",
+                "exampleParametersResolution": "schema"
               }
             }')
 
