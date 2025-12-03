@@ -85,7 +85,7 @@ jobs:
 
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN REST API (FINAL FILE-BASED FIX)
+      # 2. PUBLISH SPEC via POSTMAN REST API (FINAL STRUCTURAL FIX)
       #######################################################################
       - name: Publish Spec via Postman REST API (cURL)
         id: postman_import
@@ -106,22 +106,22 @@ jobs:
           # 2. CREATE API VERSION
           echo "Creating new API Version: $VERSION_NAME..."
           
-          # CRITICAL FIX: Write the payload to a file and submit the file
+          # CRITICAL FIX: Remove the problematic "baseVersionId" from the payload.
+          # We only include the required 'name' field.
           jq -n \
             --arg name "$VERSION_NAME" \
-            --arg baseId "$API_ID_FINAL" \
-            '{"apiVersion": {"name": $name, "baseVersionId": $baseId}}' > "$VERSION_PAYLOAD_FILE"
+            '{"apiVersion": {"name": $name}}' > "$VERSION_PAYLOAD_FILE"
           
-          echo "--- DEBUG JSON PAYLOAD (FILE SUBMISSION) ---"
+          echo "--- DEBUG JSON PAYLOAD (FINAL CLEAN PAYLOAD) ---"
           cat "$VERSION_PAYLOAD_FILE"
-          echo "------------------------------------------"
+          echo "------------------------------------------------"
 
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -H "Accept: application/vnd.api.v10+json" \
-            --data @"$VERSION_PAYLOAD_FILE") # <--- Submit file content
+            --data @"$VERSION_PAYLOAD_FILE") # Submit file content
 
           API_VERSION_ID=$(echo "$RESPONSE" | jq -r '.apiVersion.id')
           if [ -z "$API_VERSION_ID" ] || [ "$API_VERSION_ID" == "null" ]; then
@@ -167,7 +167,7 @@ jobs:
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// JWT Auth Script: Use pm.environment.get() for client/token details",
+                  "// JWT Auth Script: Use pm.environment.get(\"clientId\") for client/token details",
                   "const clientId = pm.environment.get(\"clientId\");",
                   "const clientSecret = pm.environment.get(\"clientSecret\");",
                   "const tokenUrl = pm.environment.get(\"tokenUrl\");",
