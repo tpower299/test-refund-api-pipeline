@@ -52,7 +52,7 @@ jobs:
           echo "File encoding sanitized."
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN REST API (Final Two-Step cURL Fix)
+      # 2. PUBLISH SPEC via POSTMAN REST API (FINAL RAW DATA cURL FIX)
       #######################################################################
       - name: Publish Spec via Postman REST API (cURL)
         id: postman_import
@@ -64,7 +64,6 @@ jobs:
           API_NAME: "Payment Refund API"
         run: |
           VERSION_NAME="v2.1.0-build-$(date +%Y%m%d%H%M%S)" 
-          VERSION_PAYLOAD_FILE="api_version_payload.json"
           
           echo "Using existing API ID: $API_ID_FINAL for '$API_NAME'"
           echo "api_id=$API_ID_FINAL" >> $GITHUB_OUTPUT
@@ -72,22 +71,25 @@ jobs:
           # 2.1 CREATE API VERSION 
           echo "Creating new API Version: $VERSION_NAME..."
           
-          # CRITICAL FIX: The only necessary payload structure is {"apiVersion": {"name": ...}}.
-          # This avoids the "baseVersionId" conflict that caused the original paramMissingError.
-          jq -n \
-            --arg name "$VERSION_NAME" \
-            '{"apiVersion": {"name": $name}}' > "$VERSION_PAYLOAD_FILE"
-          
-          echo "--- DEBUG JSON PAYLOAD (RETRYING CLEAN PAYLOAD) ---"
-          cat "$VERSION_PAYLOAD_FILE"
-          echo "----------------------------------------------------"
-
+          # CRITICAL FIX: Pass the minimal JSON payload directly as a raw string 
+          # using a Bash Here-Document to avoid file reading/encoding conflicts.
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -H "Accept: application/vnd.api.v10+json" \
-            --data @"$VERSION_PAYLOAD_FILE") 
+            -d @- << EOF # Pass data directly from the input stream
+{
+  "apiVersion": {
+    "name": "$VERSION_NAME"
+  }
+}
+EOF
+) 
+          
+          echo "--- DEBUG RAW RESPONSE ---"
+          echo "$RESPONSE"
+          echo "--------------------------"
 
           API_VERSION_ID=$(echo "$RESPONSE" | jq -r '.apiVersion.id')
           if [ -z "$API_VERSION_ID" ] || [ "$API_VERSION_ID" == "null" ]; then
