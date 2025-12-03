@@ -60,6 +60,7 @@ jobs:
           API_ID="4351c3b1-def3-4d95-9ef5-4ce0dcc42853" 
           WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
           FILE="${{ steps.loadspec.outputs.specfile }}"
+          API_NAME="Payment Refund API" # Define API name here
           
           # Install Postman CLI
           sudo npm install -g postman-cli
@@ -69,8 +70,9 @@ jobs:
           # Use a timestamped version name
           VERSION_NAME="v2.1.0-build-$(date +%Y%m%d%H%M%S)"
 
-          # CRITICAL FIX: Change 'push' to the correct subcommand 'publish'
+          # CRITICAL FIX: Add the required '--name' flag
           CLI_OUTPUT=$(postman api publish "$FILE" \
+            --name "$API_NAME" \
             --base-api-id "$API_ID" \
             --base-api-version "$VERSION_NAME" \
             --workspace-id "$WORKSPACE_ID" \
