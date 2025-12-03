@@ -40,7 +40,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (jq path fixed)
+      # 3. CREATE SPEC IN SPEC HUB (Success Confirmed)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -74,12 +74,10 @@ jobs:
 
           echo "Spec creation response: $RESPONSE"
 
-          # CRITICAL FIX: The API returns the ID at the top level (.id) not nested (.spec.id)
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.id')
           
-          # Check for existence of the ID field AND check for known API error structure
-          if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" || "$SPEC_ID" == "Required property" ]]; then
-            echo "CRITICAL ERROR: Failed to create spec. Final error response: $RESPONSE"
+          if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
+            echo "CRITICAL ERROR: Failed to create spec. Response: $RESPONSE"
             exit 1
           fi
 
@@ -87,7 +85,7 @@ jobs:
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
-      # 4. Generate collection from the spec
+      # 4. Generate collection from the spec (FIXED: Added "name")
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -97,18 +95,19 @@ jobs:
         run: |
           echo "Generating collection from Spec ID $SPEC_ID…"
 
+          # FIX: Added "name" parameter to the JSON body
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"options":{"requestParametersResolution":"example"}}')
+            -d '{"name": "Payment Refund API", "options":{"requestParametersResolution":"example"}}') 
 
           echo "Collection generation response: $RESPONSE"
 
           COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
 
           if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
-            echo "ERROR: Failed to extract COLLECTION_ID"
+            echo "ERROR: Failed to extract COLLECTION_ID. Response: $RESPONSE"
             exit 1
           fi
 
