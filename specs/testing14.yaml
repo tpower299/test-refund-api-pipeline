@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Payment Processing API - Refund Service 2
+  title: Payment  Processing API - Refund Service 2
   description: |
     Comprehensive API for managing payment refunds in a financial services platform.
     This API handles refund creation, status tracking, cancellation, and reporting for
