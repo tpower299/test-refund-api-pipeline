@@ -32,19 +32,18 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (with Debugging)
+      # 2. Create API If Not Exists (FIXED with v10 Accept Header)
       #######################################################################
-      - name: Ensure API Exists (with Debug)
+      - name: Ensure API Exists (with Fix)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
           echo "Searching for existing API: $API_NAME in workspace ${{ secrets.POSTMAN_WORKSPACE_ID }}"
 
-          # Use -w "\nHTTP_STATUS:%{http_code}" to capture the status code
+          # API Lookup 
           API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis?workspace=${{ secrets.POSTMAN_WORKSPACE_ID }}")
           
-          # Separate the body and the HTTP status code
           HTTP_STATUS=$(echo "$API_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
           API_BODY=$(echo "$API_LOOKUP" | head -n -1)
 
@@ -53,25 +52,24 @@ jobs:
           echo "--------------------------------------------------------"
 
           if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Failed to lookup APIs (HTTP $HTTP_STATUS). Check API Key and Workspace ID."
+            echo "ERROR: Failed to lookup APIs (HTTP $HTTP_STATUS)."
             exit 1 
           fi
 
-          # Look for API ID
           API_ID=$(echo "$API_BODY" | jq -r \
             ".apis[] | select(.name==\"$API_NAME\") | .id")
 
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist or jq failed to find it — creating…"
             
-            # API Creation Call
+            # API Creation Call - Includes the required Accept: application/vnd.api.v10+json header
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "https://api.getpostman.com/apis" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
+              -H "Accept: application/vnd.api.v10+json" \
               -d "{\"name\": \"$API_NAME\", \"workspace\": \"${{ secrets.POSTMAN_WORKSPACE_ID }}\"}")
             
-            # Separate body and status for creation response
             HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
             CREATE_BODY=$(echo "$CREATE" | head -n -1)
 
@@ -114,7 +112,6 @@ jobs:
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis/$API_ID/versions")
           
-          # Separate the body and the HTTP status code
           HTTP_STATUS=$(echo "$VERSION_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
           VERSION_BODY=$(echo "$VERSION_LOOKUP" | head -n -1)
 
@@ -162,6 +159,8 @@ jobs:
           VERSION_ID="${{ steps.ensureversion.outputs.version_id }}"
           CONTENTS="${{ steps.loadspec.outputs.contents }}"
 
+          echo "Attempting to upload spec to API $API_ID, Version $VERSION_ID..."
+
           # Create or update schema
           CREATE_SCHEMA=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID/versions/$VERSION_ID/schemas" \
@@ -175,6 +174,7 @@ jobs:
 
           SCHEMA_ID=$(echo "$CREATE_SCHEMA" | jq -r ".schema.id")
 
+          echo "Schema upload response: $CREATE_SCHEMA"
           echo "schema_id=$SCHEMA_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
@@ -193,6 +193,7 @@ jobs:
 
           COLLECTION_ID=$(echo "$GEN" | jq -r ".collectionId")
 
+          echo "Collection generation response: $GEN"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
