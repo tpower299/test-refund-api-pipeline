@@ -34,7 +34,7 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. CREATE SPEC IN SPEC HUB (Conceptual Proof - Success Confirmed)
+      # 2. CREATE SPEC IN SPEC HUB (Source of Truth)
       #######################################################################
       - name: Create Spec in Spec Hub (Source of Truth)
         id: create_spec
@@ -68,16 +68,13 @@ jobs:
 
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY (FIXED: Removing -n option)
+      # 3. GENERATE COLLECTION LOCALLY (Removed -n option)
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
         run: |
-          # Install the necessary conversion tool
           npm install -g openapi-to-postmanv2
           
-          # Generate the collection file from the OpenAPI spec
-          # FIX: Removed the unsupported '-n' flag to allow the command to run.
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
             -o collection.json
@@ -86,7 +83,7 @@ jobs:
 
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (Using reliable POST endpoint)
+      # 4. UPLOAD/UPDATE COLLECTION (FIXED: Added JSON 'collection' wrapper)
       #######################################################################
       - name: Upload or Update Collection
         id: upload_collection
@@ -94,13 +91,21 @@ jobs:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
         run: |
+          echo "Wrapping collection JSON for upload..."
+          
+          # Use jq to wrap the collection.json content inside {"collection": ...}
+          PAYLOAD=$(jq -n \
+            --rawfile collection_content collection.json \
+            '{collection: ($collection_content | fromjson)}' )
+            
           echo "Uploading generated collection to Postman..."
           
+          # Send the wrapped payload
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            --data-binary @collection.json)
+            -d "$PAYLOAD")
             
           COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
 
