@@ -68,7 +68,7 @@ jobs:
 
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY (Removed -n option)
+      # 3. GENERATE COLLECTION LOCALLY
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
@@ -83,7 +83,7 @@ jobs:
 
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (FIXED: Added JSON 'collection' wrapper)
+      # 4. UPLOAD/UPDATE COLLECTION
       #######################################################################
       - name: Upload or Update Collection
         id: upload_collection
@@ -100,7 +100,6 @@ jobs:
             
           echo "Uploading generated collection to Postman..."
           
-          # Send the wrapped payload
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -119,18 +118,33 @@ jobs:
 
 
       #######################################################################
-      # 5. Inject JWT Pre-request Script 
+      # 5. Inject JWT Pre-request Script (FIXED: Fetch-Modify-Put Pattern)
       #######################################################################
       - name: Inject JWT Script
         env:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           COLLECTION_ID: ${{ steps.upload_collection.outputs.collection_id }}
         run: |
-          echo "Injecting JWT prerequest script…"
+          echo "Fetching collection structure for modification..."
+
+          # 1. FETCH the entire collection JSON
+          FULL_COLLECTION_RESPONSE=$(curl -s -X GET \
+            "https://api.getpostman.com/collections/$COLLECTION_ID" \
+            -H "X-Api-Key: $API_KEY")
           
-          PAYLOAD=$(jq -n \
-            '{"collection": {
-              "event": [{
+          # Check if the fetch was successful
+          if echo "$FULL_COLLECTION_RESPONSE" | jq -e '.collection' > /dev/null; then
+              FULL_COLLECTION=$(echo "$FULL_COLLECTION_RESPONSE" | jq '.collection')
+          else
+              echo "CRITICAL ERROR: Failed to fetch collection for modification. Response: $FULL_COLLECTION_RESPONSE"
+              exit 1
+          fi
+
+          echo "Modifying collection with JWT script injection..."
+          
+          # JWT script event structure to inject
+          JWT_SCRIPT='[
+              {
                 "listen": "prerequest",
                 "script": {
                   "type": "text/javascript",
@@ -149,14 +163,21 @@ jobs:
                     "});"
                   ]
                 }
-              }]
-            }}')
+              }
+            ]'
+            
+          # 2. MODIFY the fetched collection JSON by adding the 'event' property
+          MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
+          
+          # 3. PUT the complete, modified JSON back
+          echo "Sending complete, modified collection back to the API..."
 
+          # Note: The API requires the outer "collection" key for the PUT
           RESPONSE=$(curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d "{\"collection\": $MODIFIED_PAYLOAD}") 
 
           echo "Collection update response: $RESPONSE"
 
