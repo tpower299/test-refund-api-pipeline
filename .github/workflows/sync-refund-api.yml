@@ -118,6 +118,7 @@ jobs:
             "https://api.getpostman.com/apis/$API_ID/versions?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
+            -H "Accept: application/vnd.api.v10+json" \
             -d "{\"apiVersion\": {\"name\": \"$VERSION_NAME\", \"baseVersionId\": \"$API_ID\"}}")
 
           API_VERSION_ID=$(echo "$RESPONSE" | jq -r '.apiVersion.id')
@@ -128,7 +129,6 @@ jobs:
           echo "API Version ID is: $API_VERSION_ID"
           
           # 3. IMPORT SPEC (Upload the file to the new version and link to a new collection)
-          # Uses multipart/form-data upload as required by the Postman API
           echo "Importing spec file $FILE to API Version $API_VERSION_ID..."
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID/versions/$API_VERSION_ID/schemas?workspaceId=$WORKSPACE_ID&modelType=collection" \
@@ -191,9 +191,7 @@ jobs:
         run: |
           COLLECTION_ID="${{ steps.postman_import.outputs.collection_id }}"
 
-          # Use npm to install Newman locally in the runner
           npm install newman
           echo "Running Newman tests on generated collection $COLLECTION_ID..."
           
-          # Use npx to execute the locally installed Newman binary
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
