@@ -1,4 +1,4 @@
-name: Sync API Spec → Generate Collection (Finalized Adoption Kit)
+name: Sync API Spec → Generate Collection (Completed Adoption Kit)
 
 on:
   push:
@@ -16,10 +16,13 @@ jobs:
       run:
         shell: bash -e {0}
         
-    # --- IMPORTANT: Variables loaded from GitHub Secrets ---
     env:
       POSTMAN_WORKSPACE_ID: ${{ secrets.POSTMAN_WORKSPACE_ID }} 
       POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
+      # Your verified Mock Server URL
+      MOCK_SERVER_URL: https://ac1d1bb2-eba1-4c5e-b492-9483f4410770.mock.pstmn.io
+      # Public URL for mocking token acquisition (JWT script dependency)
+      AUTH_SERVER_URL: https://postman-echo.com/post
       
     steps:
       - uses: actions/checkout@v3
@@ -129,25 +132,27 @@ jobs:
           echo "SUCCESS: Collection updated with advanced JWT script."
           
       #######################################################################
-      # 6. CREATE DEV ENVIRONMENT (Required Component) - UPDATED BASE URL
+      # 6. CREATE DEV ENVIRONMENT (Required Component) - USING MOCK_SERVER_URL
       #######################################################################
       - name: Create Base Dev Environment
         id: create_env
         run: |
-          # Base URL updated to YOUR mock server URL
-          ENV_PAYLOAD='{
-            "environment": {
-              "name": "Payment Processing - Dev",
-              "values": [
-                { "key": "baseUrl", "value": "https://api.payments.example.com/v2", "enabled": true },
-                { "key": "tokenUrl", "value": "https://postman-echo.com/post", "enabled": true },
-                { "key": "clientId", "value": "dev-client-id-internal", "enabled": true },
-                { "key": "clientSecret", "value": "dev-secret-internal", "enabled": true },
-                { "key": "jwtToken", "value": "", "enabled": true },
-                { "key": "tokenExpiry", "value": "0", "enabled": true }
-              ]
-            }
-          }'
+          ENV_PAYLOAD=$(jq -n \
+            --arg baseUrl "$MOCK_SERVER_URL" \
+            --arg tokenUrl "$AUTH_SERVER_URL" \
+            '{
+              "environment": {
+                "name": "Payment Processing - Dev",
+                "values": [
+                  { "key": "baseUrl", "value": $baseUrl, "enabled": true },
+                  { "key": "tokenUrl", "value": $tokenUrl, "enabled": true },
+                  { "key": "clientId", "value": "dev-client-id-internal", "enabled": true },
+                  { "key": "clientSecret", "value": "dev-secret-internal", "enabled": true },
+                  { "key": "jwtToken", "value": "", "enabled": true },
+                  { "key": "tokenExpiry", "value": "0", "enabled": true }
+                ]
+              }
+            }')
 
           HTTP_CODE=$(curl -X POST \
             "https://api.getpostman.com/environments?workspaceId=$POSTMAN_WORKSPACE_ID" \
@@ -161,26 +166,25 @@ jobs:
           ENV_ID=$(echo "$RESPONSE_BODY" | jq -r '.environment.id')
           
           if [[ "$HTTP_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
-            echo "WARNING: Environment creation failed (possibly exists or API Key issue)."
-            echo "HTTP STATUS: $HTTP_CODE"
+            echo "WARNING: Environment creation failed (possibly exists or API Key issue). Status: $HTTP_CODE"
             echo "RAW RESPONSE BODY: $RESPONSE_BODY" 
           else
             echo "SUCCESS: Dev Environment created. ID: $ENV_ID"
           fi
           
       #######################################################################
-      # 7. Run tests using Newman (Final CI/CD Check) - UPDATED BASE URL
+      # 7. Run tests using Newman (Final CI/CD Check) - USING MOCK_SERVER_URL
       #######################################################################
       - name: Run Tests (Newman Validation)
         run: |
           COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
           echo "Running Newman tests against your Mock Server (CI/CD validation)..."
           
-          # Base URL is your actual mock server, Token URL is Postman Echo (for successful handshake)
+          # Using MOCK_SERVER_URL and AUTH_SERVER_URL environment variables directly
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=$POSTMAN_API_KEY" \
             --insecure \
-            --env-var "baseUrl=https://api.payments.example.com/v2" \
-            --env-var "tokenUrl=https://postman-echo.com/post" \
+            --env-var "baseUrl=$MOCK_SERVER_URL" \
+            --env-var "tokenUrl=$AUTH_SERVER_URL" \
             --env-var "clientId=mock_client" \
             --env-var "clientSecret=mock_secret"
             
