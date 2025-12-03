@@ -43,7 +43,7 @@ jobs:
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL COMMAND FIX)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (POSITIONAL ARG FIX)
       #######################################################################
       - name: Install and Publish Spec via Postman CLI
         id: postman_import
@@ -58,12 +58,11 @@ jobs:
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # CRITICAL FIX: Using 'postman api publish' with the required '--name' flag.
-          OUTPUT=$(POSTMAN_API_KEY="$API_KEY" npx postman api publish \
-            --file "$FILE" \
+          # CRITICAL FIX: Removed '--file' flag and passed $FILE as the first positional argument.
+          OUTPUT=$(POSTMAN_API_KEY="$API_KEY" npx postman api publish "$FILE" \
             --workspace-id $WORKSPACE_ID \
             --api-key "$API_KEY" \
-            --name "$API_NAME") # <--- REQUIRED FLAG RE-INTRODUCED
+            --name "$API_NAME") 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
