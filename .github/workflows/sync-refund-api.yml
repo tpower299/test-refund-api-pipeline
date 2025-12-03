@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y jq
 
       #######################################################################
-      # 1. Detect File & Extract Name (Dynamic)
+      # 1. Detect File & Extract Name (Robust Node.js Version)
       #######################################################################
       - name: Detect Spec File and Name
         id: spec
@@ -42,29 +42,36 @@ jobs:
           FILE=$(find specs -type f \( -name "*.yaml" -o -name "*.yml" -o -name "*.json" \) | head -n 1)
           
           if [ -z "$FILE" ]; then
-            echo "Error: No spec file found in specs/ folder"
+            echo "::error::No spec file found in specs/ folder"
             exit 1
           fi
 
-          # Sanitize file (encoding)
-          iconv -c -f utf-8 -t utf-8 "$FILE" | tr -d '\r' > "$FILE.tmp"
-          mv "$FILE.tmp" "$FILE"
-          
-          # Extract the 'title' from the spec to use as the Name in Postman
-          # Fallback to filename if title is not found
-          SPEC_NAME=$(grep -m 1 "title:" "$FILE" | sed 's/.*title: *//' | tr -d '"' | tr -d "'" | tr -d '\r')
+          # Use Node.js to extract the title cleanly (handles quotes/spaces better than grep)
+          SPEC_NAME=$(node -e "
+            const fs = require('fs');
+            try {
+              const content = fs.readFileSync('$FILE', 'utf8');
+              // Regex to find 'title:' followed by text, ignoring quotes
+              const match = content.match(/title:\s*(?:[\"']?)(.*?)(?:[\"']?)\s*$/m);
+              if (match && match[1]) console.log(match[1].trim());
+              else console.log('');
+            } catch (e) { console.log(''); }
+          ")
+
+          # Fallback to filename if title extraction failed
           if [[ -z "$SPEC_NAME" ]]; then
             SPEC_NAME=$(basename "$FILE")
+            echo "::warning::Could not extract 'title' from YAML. Using filename: $SPEC_NAME"
           fi
           
-          echo "Found File: $FILE"
-          echo "Spec Name: $SPEC_NAME"
+          echo "Checked File: $FILE"
+          echo "Extracted Spec Name: '$SPEC_NAME'"
           
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
           echo "specname=$SPEC_NAME" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. UPSERT SPEC IN SPEC HUB (Create or Update)
+      # 2. UPSERT SPEC (With Verbose Logging & Error Handling)
       #######################################################################
       - name: Upsert Spec in Spec Hub
         id: create_spec
@@ -72,40 +79,67 @@ jobs:
           SPEC_NAME="${{ steps.spec.outputs.specname }}"
           FILE="${{ steps.spec.outputs.specfile }}"
           
-          # 1. Check if Spec exists in Workspace
+          echo "🔎 Looking for existing spec named: '$SPEC_NAME' in Workspace..."
+          
+          # 1. Fetch all specs in the workspace
           LIST_RESPONSE=$(curl -s -X GET "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY")
             
-          EXISTING_ID=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.specs[] | select(.name == $name) | .id')
+          # 2. Check for Duplicates (Debug Info)
+          COUNT=$(echo "$LIST_RESPONSE" | jq --arg name "$SPEC_NAME" '[.specs[] | select(.name == $name)] | length')
+          if [ "$COUNT" -gt "1" ]; then
+            echo "::warning::Found $COUNT specs with the name '$SPEC_NAME'. This script will update the first one found."
+          fi
 
-          # 2. Prepare Payload
+          # 3. Find ID of existing spec (if any)
+          EXISTING_ID=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.specs[] | select(.name == $name) | .id' | head -n 1)
+
+          # 4. Prepare Payload
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE" \
             --arg name "$SPEC_NAME" \
             '{ name: $name, type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
 
           if [ -n "$EXISTING_ID" ] && [ "$EXISTING_ID" != "null" ]; then
-            echo "Spec '$SPEC_NAME' exists (ID: $EXISTING_ID). Updating..."
+            echo "✅ MATCH FOUND! Updating Spec ID: $EXISTING_ID"
             
-            # PERFORM UPDATE (PUT)
-            curl -s -X PUT \
+            # PERFORM UPDATE (PUT) - WITH LOGGING
+            HTTP_CODE=$(curl -s -X PUT \
               "https://api.getpostman.com/specs/$EXISTING_ID" \
               -H "X-Api-Key: $POSTMAN_API_KEY" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD" > /dev/null
+              -d "$PAYLOAD" \
+              -o response.json \
+              -w "%{http_code}")
               
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::Failed to update spec. Status: $HTTP_CODE"
+              cat response.json
+              exit 1
+            fi
+            
+            echo "Spec successfully updated."
             echo "spec_id=$EXISTING_ID" >> $GITHUB_OUTPUT
           else
-            echo "Spec '$SPEC_NAME' does not exist. Creating..."
+            echo "⚠️ NO MATCH FOUND. Creating NEW Spec: '$SPEC_NAME'"
             
             # PERFORM CREATE (POST)
-            RESPONSE=$(curl -s -X POST \
+            HTTP_CODE=$(curl -s -X POST \
               "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
               -H "X-Api-Key: $POSTMAN_API_KEY" \
               -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
+              -d "$PAYLOAD" \
+              -o response.json \
+              -w "%{http_code}")
               
-            NEW_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "::error::Failed to create spec. Status: $HTTP_CODE"
+              cat response.json
+              exit 1
+            fi
+
+            NEW_ID=$(cat response.json | jq -r '.spec.id')
+            echo "Spec successfully created. ID: $NEW_ID"
             echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
           fi
 
