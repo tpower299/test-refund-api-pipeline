@@ -32,16 +32,17 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FINAL ATTEMPT FIX)
+      # 2. Create API If Not Exists (FINAL WORKING FIX with Combined Payload)
       #######################################################################
-      - name: Ensure API Exists (Final Attempt Fix)
+      - name: Ensure API Exists (Final Working Fix)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
-          WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID }}"
-          echo "Searching for existing API: $API_NAME in workspace $WORKSPACE_ID"
+          # Using the new, working workspace ID
+          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
+          echo "Searching for existing API: $API_NAME in new workspace $WORKSPACE_ID"
 
-          # 1. API Lookup 
+          # 1. API Lookup (Confirms key/ID work for GET requests)
           API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID")
           
@@ -52,8 +53,8 @@ jobs:
           echo "$API_BODY"
           echo "--------------------------------------------------------"
 
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Failed to lookup APIs (HTTP $HTTP_STATUS). Check API Key and Workspace ID."
+          if [ "$HTTP_STATUS" != "200" ]; then 
+            echo "ERROR: Lookup failed (HTTP $HTTP_STATUS)."
             exit 1 
           fi
 
@@ -61,24 +62,21 @@ jobs:
             ".apis[] | select(.name==\"$API_NAME\") | .id")
 
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-            echo "API does not exist or jq failed to find it — creating…"
+            echo "API does not exist — creating…"
             
-            # --- CRITICAL FIX SECTION ---
-            # 1. Define the full creation URL explicitly in a shell variable
+            # CRITICAL FIX: The request URL includes the workspace ID (for API validation), 
+            # and the payload includes the workspace ID in the relationships block (for data structure).
             CREATE_URL="https://api.getpostman.com/apis?workspace=$WORKSPACE_ID"
-            echo "Using API Creation URL: $CREATE_URL"
-
-            # 2. Define the JSONAPI payload expected by the v10 standard
-            CREATE_PAYLOAD='{"data":{"type":"api","attributes":{"name":"'${API_NAME}'"}}}'
             
-            # 3. API Creation Call: Use the explicit URL variable and required headers
+            # The JSON payload includes the name attributes and the workspace relationships
+            CREATE_PAYLOAD='{"data":{"type":"api","attributes":{"name":"'${API_NAME}'"},"relationships":{"workspace":{"data":{"id":"'${WORKSPACE_ID}'","type":"workspace"}}}}}'
+            
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "$CREATE_URL" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/vnd.api.v10+json" \
               -d "$CREATE_PAYLOAD") 
-            # --- END CRITICAL FIX SECTION ---
             
             HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
             CREATE_BODY=$(echo "$CREATE" | head -n -1)
@@ -86,21 +84,18 @@ jobs:
             echo "--- RAW API CREATE RESPONSE (HTTP Status: $HTTP_STATUS) ---"
             echo "$CREATE_BODY"
             echo "----------------------------------------------------------"
-            
+
             if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
               echo "ERROR: Failed to create API (HTTP $HTTP_STATUS). Check body for details."
               exit 1
             fi
             
-            # Parse API ID (prioritize v10 structure)
+            # The success response should use the .data.id structure
             API_ID=$(echo "$CREATE_BODY" | jq -r ".data.id")
             
-            if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-                API_ID=$(echo "$CREATE_BODY" | jq -r ".api.id") 
-                if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-                    echo "CRITICAL ERROR: Failed to parse API ID from creation response. Exiting."
-                    exit 1
-                fi
+            if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then 
+              echo "CRITICAL ERROR: Failed to parse API ID from creation response."
+              exit 1 
             fi
 
           else
@@ -203,7 +198,7 @@ jobs:
             "https://api.getpostman.com/apis/${{ steps.ensureapi.outputs.api_id }}/versions/${{ steps.ensureversion.outputs.version_id }}/schemas/$SCHEMA_ID/generate/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{\"workspace\": \"${{ secrets.POSTMAN_WORKSPACE_ID }}\", \"overwrite\": true}")
+            -d "{\"workspace\": \"$WORKSPACE_ID\", \"overwrite\": true}") # Note: using the explicit WORKSPACE_ID variable from Step 2 run block
 
           COLLECTION_ID=$(echo "$GEN" | jq -r ".collectionId")
 
