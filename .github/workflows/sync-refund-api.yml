@@ -62,7 +62,6 @@ jobs:
             -d "$PAYLOAD" > /dev/null
           echo "SUCCESS: Spec entity created/updated in Spec Hub."
 
-
       #######################################################################
       # 3. GENERATE AND INJECT SCRIPT LOCALLY
       #######################################################################
@@ -108,9 +107,8 @@ jobs:
           
           echo "SUCCESS: Collection JSON generated and script injected locally."
 
-
       #######################################################################
-      # 4. UPLOAD FINAL COLLECTION (Single, Stable POST call)
+      # 4. UPLOAD FINAL COLLECTION (Enhanced Debug)
       #######################################################################
       - name: Upload Final Collection
         id: upload_collection
@@ -121,25 +119,34 @@ jobs:
           echo "Wrapping collection JSON for upload..."
           PAYLOAD=$(jq -n \
             --rawfile collection_content collection.json \
-            '{collection: ($collection_content | fromjson)}' )
-            
+            '{collection: ($collection_content | fromjson)}')
+
           echo "Uploading generated collection to Postman..."
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-            
-          COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
 
+          echo "Upload response (raw):"
+          echo "$RESPONSE"
+
+          echo "Upload response (pretty):"
+          echo "$RESPONSE" | jq
+
+          COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
           if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to upload collection. Response: $RESPONSE"
             exit 1
           fi
 
           echo "SUCCESS: Collection uploaded. ID: $COLLECTION_ID"
-          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT 
+          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
+          # Verify the collection exists by fetching it
+          echo "Verifying collection exists in Postman..."
+          curl -s -X GET "https://api.getpostman.com/collections/$COLLECTION_ID" \
+            -H "X-Api-Key: $API_KEY" | jq
 
       #######################################################################
       # 5. Run tests using Newman (FIXED: Use Local File)
@@ -151,3 +158,4 @@ jobs:
           echo "Running Newman tests against local collection.json..."
           # Running Newman against the local file instead of the remote URL
           npx newman run collection.json --insecure
+
