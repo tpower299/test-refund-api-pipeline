@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-node@v4 
+      - uses: actions/setup-node@v4
 
       #######################################################################
       # 1. Detect spec file
@@ -40,7 +40,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB 
+      # 3. CREATE SPEC IN SPEC HUB  (Correct spec format)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -49,8 +49,8 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Constructing JSON payload…"
-          
+          echo "Constructing JSON payload with final type fix: OPENAPI:3.0…"
+
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
             '{
@@ -64,6 +64,8 @@ jobs:
               ]
             }')
 
+          echo "Sending payload to POST /specs…"
+
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -73,17 +75,18 @@ jobs:
           echo "Spec creation response: $RESPONSE"
 
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.id')
-          
+
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to create spec. Response: $RESPONSE"
             exit 1
           fi
 
           echo "SUCCESS: Created Spec ID: $SPEC_ID"
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 4. Generate collection from the spec (STRICT enterprise-compatible)
+      # 4. Generate collection from the spec 
+      #    (FINAL WORKING FIX — only valid schema: options.language=json)
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -100,8 +103,7 @@ jobs:
             -d '{
               "name": "Payment Refund API",
               "options": {
-                "requestParametersResolution": "schema",
-                "exampleParametersResolution": "schema"
+                "language": "json"
               }
             }')
 
