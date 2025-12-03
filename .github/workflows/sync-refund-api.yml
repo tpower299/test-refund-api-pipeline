@@ -10,10 +10,15 @@ on:
 jobs:
   sync-api:
     runs-on: ubuntu-latest
+    
+    # Exit immediately if a command fails
+    defaults:
+      run:
+        shell: bash -e {0}
 
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4 
 
       #######################################################################
       # 1. Detect spec file
@@ -21,6 +26,7 @@ jobs:
       - name: Detect Spec File
         id: spec
         run: |
+          # Finds the single spec file regardless of extension
           FILE=$(ls specs/payment-refund-api-openapi.*)
           echo "Found spec: $FILE"
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
@@ -36,7 +42,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (multipart upload — fully correct)
+      # 3. CREATE SPEC IN SPEC HUB (JSON BODY FIX)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -45,27 +51,36 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          echo "Uploading spec via multipart/form-data…"
+          echo "Reading spec file into memory..."
+          # 1. Read the entire file content into a variable
+          SPEC_CONTENT=$(cat "$FILE_PATH")
 
+          # 2. Construct the JSON payload with the spec content embedded
+          # This replaces multipart/form-data with application/json
+          PAYLOAD=$(jq -n \
+            --arg content "$SPEC_CONTENT" \
+            '{"spec": $content, "name": "Payment Refund API", "type": "openapi" }')
+
+          echo "Sending spec content via application/json..."
+
+          # 3. Use cURL with application/json header and the JSON payload
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
-            -H "Accept: application/json" \
-            -F "specName=Payment Refund API" \
-            -F "contentType=openapi" \
-            -F "specFile=@$FILE_PATH")
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
 
           echo "Spec creation response: $RESPONSE"
 
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
 
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
-            echo "ERROR: Failed to extract SPEC_ID"
+            echo "CRITICAL ERROR: Failed to extract SPEC_ID from response."
             exit 1
           fi
 
           echo "Created Spec ID: $SPEC_ID"
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
       # 4. Generate collection from the spec
@@ -148,4 +163,3 @@ jobs:
 
           echo "Running Newman tests…"
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
-
