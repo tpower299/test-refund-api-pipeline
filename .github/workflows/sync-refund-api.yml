@@ -32,9 +32,9 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FINAL WORKING FIX with Combined Payload)
+      # 2. Create API If Not Exists (FIXED with File-Based Payload)
       #######################################################################
-      - name: Ensure API Exists (Final Working Fix)
+      - name: Ensure API Exists (File-Based Payload Fix)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
@@ -64,19 +64,39 @@ jobs:
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist — creating…"
             
-            # CRITICAL FIX: The request URL includes the workspace ID (for API validation), 
-            # and the payload includes the workspace ID in the relationships block (for data structure).
+            # --- CRITICAL FIX: Write Payload to File ---
+            # Use a here-doc to safely write the complex JSON payload to a temporary file
+            cat << EOF > api_payload.json
+{
+  "data": {
+    "type": "api",
+    "attributes": {
+      "name": "$API_NAME"
+    },
+    "relationships": {
+      "workspace": {
+        "data": {
+          "id": "$WORKSPACE_ID",
+          "type": "workspace"
+        }
+      }
+    }
+  }
+}
+EOF
+            echo "Successfully wrote complex JSON payload to api_payload.json."
+            # --- END CRITICAL FIX ---
+
+            # The request URL includes the workspace ID (for API validation)
             CREATE_URL="https://api.getpostman.com/apis?workspace=$WORKSPACE_ID"
             
-            # The JSON payload includes the name attributes and the workspace relationships
-            CREATE_PAYLOAD='{"data":{"type":"api","attributes":{"name":"'${API_NAME}'"},"relationships":{"workspace":{"data":{"id":"'${WORKSPACE_ID}'","type":"workspace"}}}}}'
-            
+            # Use @api_payload.json to read the file content, avoiding shell quoting issues
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
               "$CREATE_URL" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/vnd.api.v10+json" \
-              -d "$CREATE_PAYLOAD") 
+              --data @api_payload.json) 
             
             HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
             CREATE_BODY=$(echo "$CREATE" | head -n -1)
@@ -90,7 +110,6 @@ jobs:
               exit 1
             fi
             
-            # The success response should use the .data.id structure
             API_ID=$(echo "$CREATE_BODY" | jq -r ".data.id")
             
             if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then 
@@ -193,12 +212,14 @@ jobs:
         id: gencoll
         run: |
           SCHEMA_ID="${{ steps.uploadspec.outputs.schema_id }}"
+          # Manually define the workspace ID here as well, since it is needed for the payload
+          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
 
           GEN=$(curl -s -X POST \
             "https://api.getpostman.com/apis/${{ steps.ensureapi.outputs.api_id }}/versions/${{ steps.ensureversion.outputs.version_id }}/schemas/$SCHEMA_ID/generate/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{\"workspace\": \"$WORKSPACE_ID\", \"overwrite\": true}") # Note: using the explicit WORKSPACE_ID variable from Step 2 run block
+            -d "{\"workspace\": \"$WORKSPACE_ID\", \"overwrite\": true}") 
 
           COLLECTION_ID=$(echo "$GEN" | jq -r ".collectionId")
 
