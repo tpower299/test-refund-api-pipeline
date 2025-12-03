@@ -43,7 +43,7 @@ jobs:
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL FIX: ENV VARS)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL, CLEAN COMMAND)
       #######################################################################
       - name: Install and Publish Spec via Postman CLI
         id: postman_import
@@ -58,17 +58,16 @@ jobs:
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # CRITICAL FIX: Removed all problematic flags (-w, --workspace) and set 
-          # POSTMAN_WORKSPACE_ID as an environment variable for the command.
+          # CRITICAL FIX: The command now relies solely on environment variables for API Key and Workspace ID
+          # and the positional argument for the file, which avoids all previous CLI syntax errors.
           OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npx postman api publish "$FILE" \
-            --api-key "$API_KEY" \
             --name "$API_NAME") 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
           echo "------------------------------"
           
-
+          
           # The 'api publish' command should return details about the API version created.
           
           # 1. Parse for API ID
