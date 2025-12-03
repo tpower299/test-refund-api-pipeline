@@ -52,7 +52,7 @@ jobs:
           echo "File encoding sanitized."
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN CLI (Final Positional Argument Fix)
+      # 2. PUBLISH SPEC via POSTMAN CLI (Final, Final Flag Fix)
       #######################################################################
       - name: Publish Spec via Postman CLI
         id: postman_import
@@ -70,10 +70,10 @@ jobs:
           # Use a timestamped version name
           VERSION_NAME="v2.1.0-build-$(date +%Y%m%d%H%M%S)"
 
-          # CRITICAL FIX: Passing API_ID as a positional argument, removing all conflicting flags.
+          # CRITICAL FIX: Using positional API_ID and the simplified '--version' flag.
           CLI_OUTPUT=$(postman api publish "$FILE" "$API_ID" \
             --name "$API_NAME" \
-            --api-version "$VERSION_NAME" \
+            --version "$VERSION_NAME" \
             --workspace-id "$WORKSPACE_ID" \
             --postman-api-key ${{ secrets.POSTMAN_API_KEY }} \
             --force)
@@ -86,13 +86,16 @@ jobs:
           
           if [ -z "$COLLECTION_ID" ]; then
              echo "ATTEMPTING SECONDARY PARSE: Looking for API Version ID..."
+             # Secondary attempt: Look for API Version ID, which the CLI definitely returns
              API_VERSION_ID=$(echo "$CLI_OUTPUT" | grep "API Version" | tail -1 | awk '{print $NF}' | tr -d '[:punct:]')
              
              if [ -n "$API_VERSION_ID" ]; then
+                # Version created, but collection ID parse failed. Fail the run for lack of ID needed for next steps.
                 echo "SUCCESS: API Version ID '$API_VERSION_ID' created. However, FAILED to parse the required Collection ID for JWT injection."
                 echo "CRITICAL ERROR: Please review the CLI output above for the Collection ID format."
                 exit 1
              else
+                # Absolute failure
                 echo "CRITICAL ERROR: Postman CLI 'publish' failed entirely. Check permissions and API Key status in the CLI log above."
                 exit 1
              fi
