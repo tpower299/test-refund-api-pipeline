@@ -55,27 +55,24 @@ jobs:
                 }
               ]
             }')
+
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
-          
-          # Extract Spec ID
-          SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
+
+          echo "Spec creation response: $RESPONSE"
+
+          SPEC_ID=$(echo "$RESPONSE" | jq -r '.id')
+
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
-            echo "ERROR: Failed to get Spec ID. Response: $RESPONSE"
+            echo "CRITICAL ERROR: Failed to get Spec ID. Response: $RESPONSE"
             exit 1
           fi
-          echo "SUCCESS: Created Spec ID: $SPEC_ID"
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
 
-      #######################################################################
-      # 2b. Print Spec ID for verification
-      #######################################################################
-      - name: Print Spec ID
-        run: |
-          echo "Spec ID being used for collection generation: ${{ steps.create_spec.outputs.spec_id }}"
+          echo "SUCCESS: Spec ID: $SPEC_ID"
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
       # 3. GENERATE AND INJECT SCRIPT LOCALLY
@@ -85,13 +82,14 @@ jobs:
         run: |
           npm install -g openapi-to-postmanv2
           
-          # 1. Generate collection JSON
+          # Generate collection JSON locally
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
             -o collection.json
           
           echo "Collection JSON generated."
-          # JWT script event structure
+
+          # JWT pre-request script
           JWT_SCRIPT='[
               {
                 "listen": "prerequest",
@@ -113,16 +111,16 @@ jobs:
                 }
               }
             ]'
-            
-          # 2. Inject script directly into the local file using jq
+
+          # Inject JWT script into the collection
           echo "Injecting JWT script into collection.json..."
           jq --argjson script_event "$JWT_SCRIPT" '.event = $script_event' collection.json > collection_modified.json
           mv collection_modified.json collection.json
           
-          echo "SUCCESS: Collection JSON generated and script injected locally."
+          echo "SUCCESS: Collection JSON generated and script injected."
 
       #######################################################################
-      # 4. UPLOAD FINAL COLLECTION (Single, Stable POST call)
+      # 4. UPLOAD FINAL COLLECTION
       #######################################################################
       - name: Upload Final Collection
         id: upload_collection
@@ -142,21 +140,21 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD")
             
+          echo "Upload response (raw): $RESPONSE"
           COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
           if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to upload collection. Response: $RESPONSE"
             exit 1
           fi
           echo "SUCCESS: Collection uploaded. ID: $COLLECTION_ID"
-          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT 
+          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 5. Run tests using Newman (FIXED: Use Local File)
+      # 5. Run tests using Newman
       #######################################################################
       - name: Run Tests
         run: |
           npm install newman
-          
           echo "Running Newman tests against local collection.json..."
           npx newman run collection.json --insecure
 
