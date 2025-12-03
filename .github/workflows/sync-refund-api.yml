@@ -71,14 +71,14 @@ jobs:
           # 2.1 CREATE API VERSION 
           echo "Creating new API Version: $VERSION_NAME..."
           
-          # CRITICAL FIX: Pass the minimal JSON payload directly as a raw string 
+          # Pass the minimal JSON payload directly as a raw string 
           # using a Bash Here-Document to avoid file reading/encoding conflicts.
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -H "Accept: application/vnd.api.v10+json" \
-            -d @- << EOF # Pass data directly from the input stream
+            -d @- << EOF 
 {
   "apiVersion": {
     "name": "$VERSION_NAME"
