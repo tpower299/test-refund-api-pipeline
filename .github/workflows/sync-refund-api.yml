@@ -1,4 +1,4 @@
-name: Sync API Spec → Generate Collection (Local Conversion Fallback)
+name: Sync API Spec → Generate Collection (Local Conversion & Inject)
 
 on:
   push:
@@ -64,22 +64,55 @@ jobs:
 
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY
+      # 3. GENERATE AND INJECT SCRIPT LOCALLY (Eliminates PUT bug)
       #######################################################################
-      - name: Generate Collection Locally
-        id: local_gen
+      - name: Generate Collection and Inject Script Locally
+        id: local_gen_inject
         run: |
-          npm install -g openapi-to-postmanv2
+          npm install -g openapi-to-postmanv2 jq
+          
+          # 1. Generate collection JSON
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
             -o collection.json
-          echo "SUCCESS: Collection JSON generated locally."
+          
+          echo "Collection JSON generated."
+
+          # JWT script event structure
+          JWT_SCRIPT='[
+              {
+                "listen": "prerequest",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "const clientId = pm.environment.get(\"clientId\");",
+                    "const clientSecret = pm.environment.get(\"clientSecret\");",
+                    "const tokenUrl = pm.environment.get(\"tokenUrl\");",
+                    "pm.sendRequest({",
+                    "  url: tokenUrl,",
+                    "  method: \"POST\",",
+                    "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                    "  body: \"client_id=\" + clientId + \"&client_secret=\" + clientSecret + \"&grant_type=client_credentials\"",
+                    "}, (err, res) => {",
+                    "  if (!err) pm.environment.set(\"jwtToken\", res.json().access_token);",
+                    "});"
+                  ]
+                }
+              }
+            ]'
+            
+          # 2. Inject script directly into the local file using jq (in-place modification)
+          echo "Injecting JWT script into collection.json..."
+          jq --argjson script_event "$JWT_SCRIPT" '.event = $script_event' collection.json > collection_modified.json
+          mv collection_modified.json collection.json
+          
+          echo "SUCCESS: Collection JSON generated and script injected locally."
 
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION
+      # 4. UPLOAD FINAL COLLECTION (Single, Stable POST call)
       #######################################################################
-      - name: Upload or Update Collection
+      - name: Upload Final Collection
         id: upload_collection
         env:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -109,61 +142,7 @@ jobs:
 
 
       #######################################################################
-      # 5. Inject JWT Pre-request Script (Fetch-Modify-Put Pattern)
-      #######################################################################
-      - name: Inject JWT Script
-        env:
-          API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          COLLECTION_ID: ${{ steps.upload_collection.outputs.collection_id }}
-        run: |
-          echo "Fetching collection structure for modification..."
-          FULL_COLLECTION_RESPONSE=$(curl -s -X GET \
-            "https://api.getpostman.com/collections/$COLLECTION_ID" \
-            -H "X-Api-Key: $API_KEY")
-          
-          if echo "$FULL_COLLECTION_RESPONSE" | jq -e '.collection' > /dev/null; then
-              FULL_COLLECTION=$(echo "$FULL_COLLECTION_RESPONSE" | jq '.collection')
-          else
-              echo "CRITICAL ERROR: Failed to fetch collection for modification. Response: $FULL_COLLECTION_RESPONSE"
-              exit 1
-          fi
-
-          echo "Modifying collection with JWT script injection..."
-          JWT_SCRIPT='[
-              {
-                "listen": "prerequest",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "const clientId = pm.environment.get(\"clientId\");",
-                    "const clientSecret = pm.environment.get(\"clientSecret\");",
-                    "const tokenUrl = pm.environment.get(\"tokenUrl\");",
-                    "pm.sendRequest({",
-                    "  url: tokenUrl,",
-                    "  method: \"POST\",",
-                    "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
-                    "  body: \"client_id=\" + clientId + \"&client_secret=\" + clientSecret + \"&grant_type=client_credentials\"",
-                    "}, (err, res) => {",
-                    "  if (!err) pm.environment.set(\"jwtToken\", res.json().access_token);",
-                    "});"
-                  ]
-                }
-              }
-            ]'
-            
-          MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
-          
-          echo "Sending complete, modified collection back to the API..."
-          RESPONSE=$(curl -s -X PUT \
-            "https://api.getpostman.com/collections/$COLLECTION_ID" \
-            -H "X-Api-Key: $API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "{\"collection\": $MODIFIED_PAYLOAD}") 
-
-          echo "Collection update response: $RESPONSE"
-
-      #######################################################################
-      # 6. Run tests using Newman (FIXED: Added --insecure flag)
+      # 5. Run tests using Newman (Final Test)
       #######################################################################
       - name: Run Tests
         run: |
