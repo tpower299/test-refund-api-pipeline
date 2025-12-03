@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v4 # Ensure Node.js is available for the Postman CLI
 
       #######################################################################
-      # 1. Read Spec File and Get File Path (BASH SYNTAX FIX)
+      # 1. Read Spec File and Get File Path
       #######################################################################
       - name: Load Spec File Path and Type
         id: loadspec
@@ -29,8 +29,6 @@ jobs:
           # Finds the single spec file regardless of extension
           FILE=$(ls specs/payment-refund-api-openapi.*)
           
-          # CRITICAL FIX: Ensure 'then' is explicitly on the same line or before the command 
-          # for consistent Bash parsing, resolving the 'unexpected token else' error.
           if [[ "$FILE" =~ \.(yaml|yml)$ ]]; then
               LANG="yaml"
           elif [[ "$FILE" =~ \.json$ ]]; then
@@ -71,7 +69,6 @@ jobs:
             "https://api.getpostman.com/workspaces/$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY")
 
-          # Check if the response contains an error message, which Postman returns as JSON
           ERROR_MESSAGE=$(echo "$RESPONSE" | jq -r '.error.message')
           
           if [ -n "$ERROR_MESSAGE" ] && [ "$ERROR_MESSAGE" != "null" ]; then
@@ -80,7 +77,6 @@ jobs:
             echo "Postman API Response: $ERROR_MESSAGE"
             exit 1
           else
-            # Extract and confirm the workspace name if successful
             WORKSPACE_NAME=$(echo "$RESPONSE" | jq -r '.workspace.name')
             echo "SUCCESS: API Key successfully authenticated and retrieved workspace: $WORKSPACE_NAME"
             echo "---"
@@ -89,7 +85,7 @@ jobs:
 
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL, CLEAN COMMAND)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (DEEP INSPECTION)
       #######################################################################
       - name: Install, Lint, and Publish Spec via Postman CLI
         id: postman_import
@@ -102,14 +98,18 @@ jobs:
           FILE="${{ steps.loadspec.outputs.specfile }}"
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
 
+          echo "--- DEBUG: File Contents Pre-Lint ---"
+          # Print the exact contents of the sanitized file to the log
+          cat "$FILE"
+          echo "------------------------------------"
+
           echo "--- Running Spec Lint Check ---"
-          # LINT CHECK: Ensures file content is valid. Using 'npm exec' for reliability.
+          # This command is expected to fail again, but the output above will show us why.
           npm exec postman -- spec lint "$FILE" 
           echo "--- Lint Check Complete ---"
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # COMMAND: The most reliable CLI command syntax: positional file arg, IDs via ENV VARS.
           OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npm exec postman -- api publish "$FILE" \
             --name "$API_NAME") 
 
@@ -154,7 +154,6 @@ jobs:
 
           echo "Injecting JWT pre-request script into collection $COLLECTION_ID"
           
-          # This CURL command remains necessary for modifying collection scripts.
           curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
