@@ -43,9 +43,9 @@ jobs:
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (FINAL, CLEAN COMMAND)
+      # 2. IMPORT SPEC and GENERATE COLLECTION via POSTMAN CLI (WITH LINT CHECK)
       #######################################################################
-      - name: Install and Publish Spec via Postman CLI
+      - name: Install, Lint, and Publish Spec via Postman CLI
         id: postman_import
         run: |
           # Use sudo for global npm install to fix EACCES permission denied error.
@@ -56,17 +56,22 @@ jobs:
           FILE="${{ steps.loadspec.outputs.specfile }}"
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
 
+          echo "--- Running Spec Lint Check ---"
+          # LINT CHECK: Ensures file content is valid before trying to publish.
+          # If this fails, the error is in the YAML/JSON file structure.
+          npx postman spec lint "$FILE" 
+          echo "--- Lint Check Complete ---"
+
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # CRITICAL FIX: The command now relies solely on environment variables for API Key and Workspace ID
-          # and the positional argument for the file, which avoids all previous CLI syntax errors.
+          # COMMAND: Now syntactically correct: file path is positional, authentication and workspace 
+          # IDs are passed via environment variables (POSTMAN_API_KEY and POSTMAN_WORKSPACE_ID).
           OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npx postman api publish "$FILE" \
             --name "$API_NAME") 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
           echo "------------------------------"
-          
           
           # The 'api publish' command should return details about the API version created.
           
