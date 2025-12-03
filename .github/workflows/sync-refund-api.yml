@@ -46,12 +46,11 @@ jobs:
             exit 1
           fi
 
-          # Use Node.js to extract the title cleanly (handles quotes/spaces better than grep)
+          # Use Node.js to extract the title cleanly
           SPEC_NAME=$(node -e "
             const fs = require('fs');
             try {
               const content = fs.readFileSync('$FILE', 'utf8');
-              // Regex to find 'title:' followed by text, ignoring quotes
               const match = content.match(/title:\s*(?:[\"']?)(.*?)(?:[\"']?)\s*$/m);
               if (match && match[1]) console.log(match[1].trim());
               else console.log('');
@@ -71,83 +70,62 @@ jobs:
           echo "specname=$SPEC_NAME" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. UPSERT SPEC (Zombie-Proof Logic)
+      # 2. CLEAN SYNC: DELETE OLD & CREATE NEW (Prevents Duplicates & Zombies)
       #######################################################################
-      - name: Upsert Spec in Spec Hub
+      - name: Clean Sync Spec in Spec Hub
         id: create_spec
         run: |
           SPEC_NAME="${{ steps.spec.outputs.specname }}"
           FILE="${{ steps.spec.outputs.specfile }}"
           
-          echo "🔎 Looking for existing spec named: '$SPEC_NAME'..."
+          echo "🔎 Checking for existing specs named: '$SPEC_NAME'..."
           
           # 1. Fetch all specs
           LIST_RESPONSE=$(curl -s -X GET "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY")
             
-          # 2. Get ALL matching IDs (not just the first one)
+          # 2. Find ALL IDs with this name
           MATCHING_IDS=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.specs[] | select(.name == $name) | .id')
           
-          # 3. Prepare Payload
+          # 3. DELETE them (Clear the path)
+          if [ -n "$MATCHING_IDS" ]; then
+            for ID in $MATCHING_IDS; do
+              echo "🗑️ Deleting existing/stale Spec ID: $ID"
+              curl -s -X DELETE \
+                "https://api.getpostman.com/specs/$ID" \
+                -H "X-Api-Key: $POSTMAN_API_KEY" > /dev/null
+            done
+            echo "✅ Cleanup complete."
+          fi
+
+          # 4. CREATE New Spec
+          echo "🆕 Creating fresh Spec: '$SPEC_NAME'..."
+          
+          # Prepare Payload
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE" \
             --arg name "$SPEC_NAME" \
             '{ name: $name, type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
 
-          UPDATED_SUCCESSFULLY=false
-          FINAL_SPEC_ID=""
-
-          # 4. Iterative Update Attempt (Handles Zombies)
-          if [ -n "$MATCHING_IDS" ]; then
-            for ID in $MATCHING_IDS; do
-              echo "Attempting to update ID: $ID"
-              
-              HTTP_CODE=$(curl -s -X PUT \
-                "https://api.getpostman.com/specs/$ID" \
-                -H "X-Api-Key: $POSTMAN_API_KEY" \
-                -H "Content-Type: application/json" \
-                -d "$PAYLOAD" \
-                -o response.json \
-                -w "%{http_code}")
-                
-              if [ "$HTTP_CODE" == "200" ]; then
-                echo "✅ Success! Updated Spec ID: $ID"
-                UPDATED_SUCCESSFULLY=true
-                FINAL_SPEC_ID=$ID
-                break
-              elif [ "$HTTP_CODE" == "404" ]; then
-                echo "⚠️ Warning: ID $ID returned 404 (Likely a Zombie/Converted Spec). Skipping..."
-              else
-                echo "❌ Error updating ID $ID. Status: $HTTP_CODE"
-              fi
-            done
-          fi
-
-          # 5. Create New if Update Failed (or no matches existed)
-          if [ "$UPDATED_SUCCESSFULLY" = false ]; then
-            echo "------------------------------------------------"
-            echo "No updateable spec found. Creating NEW Spec: '$SPEC_NAME'"
-            echo "------------------------------------------------"
+          # Perform Create (POST)
+          HTTP_CODE=$(curl -s -X POST \
+            "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            -o response.json \
+            -w "%{http_code}")
             
-            HTTP_CODE=$(curl -s -X POST \
-              "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
-              -H "X-Api-Key: $POSTMAN_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD" \
-              -o response.json \
-              -w "%{http_code}")
-              
-            if [ "$HTTP_CODE" != "200" ]; then
-              echo "::error::Failed to create spec. Status: $HTTP_CODE"
-              cat response.json
-              exit 1
-            fi
-
-            FINAL_SPEC_ID=$(cat response.json | jq -r '.spec.id')
-            echo "✅ Spec successfully created. ID: $FINAL_SPEC_ID"
+          # Check for 200 OK or 201 Created
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
+            echo "::error::Failed to create spec. Status: $HTTP_CODE"
+            cat response.json
+            exit 1
           fi
-          
-          echo "spec_id=$FINAL_SPEC_ID" >> $GITHUB_OUTPUT
+
+          NEW_ID=$(cat response.json | jq -r '.spec.id')
+          echo "✅ Spec successfully created. ID: $NEW_ID"
+          echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
       # 3. GENERATE COLLECTION LOCALLY
@@ -179,7 +157,9 @@ jobs:
           
           RESPONSE_BODY=$(cat response_body.json)
           COLLECTION_ID=$(echo "$RESPONSE_BODY" | jq -r '.collection.id')
-          if [[ "$HTTP_CODE" != "200" || -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
+          
+          # Check for 200 OK or 201 Created
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]] || [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to upload collection."
             echo "HTTP STATUS: $HTTP_CODE"
             echo "RAW RESPONSE BODY: $RESPONSE_BODY"
@@ -253,7 +233,7 @@ jobs:
           RESPONSE_BODY=$(cat response_env_body.json)
           ENV_ID=$(echo "$RESPONSE_BODY" | jq -r '.environment.id')
           
-          if [[ "$HTTP_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
+          if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]] || [[ -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
             echo "WARNING: Environment creation failed (possibly exists or API Key issue). Status: $HTTP_CODE"
             echo "RAW RESPONSE BODY: $RESPONSE_BODY"
            else
