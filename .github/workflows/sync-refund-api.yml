@@ -83,7 +83,7 @@ jobs:
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
-      # 4. Generate collection from the spec (FIXED — NO options field)
+      # 4. Generate collection from the spec (VALID options required)
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -97,7 +97,13 @@ jobs:
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"name": "Payment Refund API"}')
+            -d '{
+              "name": "Payment Refund API",
+              "options": {
+                "requestParametersResolution": "example",
+                "exampleParametersResolution": "example"
+              }
+            }')
 
           echo "Collection generation response: $RESPONSE"
 
