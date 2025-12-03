@@ -31,7 +31,7 @@ jobs:
           npm install -g openapi-to-postmanv2 newman 
           sudo apt-get install -y jq 
 
-          # Define JWT script and save it to a temporary file
+          # Define JWT script and save it to a temporary file for use in later steps
           JWT_SCRIPT='[ { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [ "// Advanced JWT Auth: Checks expiry and refreshes token", "const clientId = pm.environment.get(\\"clientId\\");", "const clientSecret = pm.environment.get(\\"clientSecret\\");", "const tokenUrl = pm.environment.get(\\"tokenUrl\\");", "const cachedToken = pm.environment.get(\\"jwtToken\\");", "const tokenExpiry = parseInt(pm.environment.get(\\"tokenExpiry\\"));", "", "// Check if token is valid (exists AND expiry time is > 30s in the future)", "if (cachedToken && tokenExpiry && Date.now() < (tokenExpiry - 30000)) {", "    pm.request.headers.upsert({key: \\"Authorization\\", value: \\"Bearer \\" + cachedToken});", "    return; // Skip token request", "}", "", "// Request new token", "pm.sendRequest({", "    url: tokenUrl,", "    method: \\"POST\\",", "    header: {\\"Content-Type\\": \\"application/x-www-form-urlencoded\\"},", "    body: {mode: \\"urlencoded\\", urlencoded: [{key: \\"grant_type\\", value: \\"client_credentials\\"}, {key: \\"client_id\\", value: clientId}, {key: \\"client_secret\\", value: clientSecret}]} ", "}, (err, response) => {", "    if (err || response.code !== 200) {", "        console.error(\\"Token request failed:\\", err || response.status);", "        return;", "    }", "    const jsonData = response.json();", "    const token = jsonData.access_token;", "    const expires_in_ms = jsonData.expires_in * 1000; ", "    pm.environment.set(\\"jwtToken\\", token);", "    pm.environment.set(\\"tokenExpiry\\", Date.now() + expires_in_ms);", "    pm.request.headers.upsert({key: \\"Authorization\\", value: \\"Bearer \\" + token});", "});" ] } } ]'
           echo "$JWT_SCRIPT" > jwt_script.json
           echo "JWT script saved."
@@ -70,7 +70,11 @@ jobs:
 
             if [ "$REQUEST_METHOD" == "POST" ]; then SPEC_ID=$(echo "$SPEC_RESPONSE" | jq -r '.id'); fi
             
-            if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then echo "CRITICAL FAILURE for $POSTMAN_SPEC_NAME"; continue; fi
+            if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then 
+              echo "CRITICAL FAILURE for $POSTMAN_SPEC_NAME: Could not extract Spec ID."
+              echo "RAW RESPONSE BODY: $SPEC_RESPONSE"
+              continue; 
+            fi
             echo "SUCCESS: Spec ID: $SPEC_ID ($REQUEST_METHOD)"
 
             # 5. Store Result for Next Step
@@ -116,7 +120,7 @@ jobs:
             
             if [ "$COL_REQUEST_METHOD" == "POST" ]; then COLLECTION_ID=$(echo "$COL_RESPONSE" | jq -r '.collection.id'); fi
 
-            if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then echo "CRITICAL FAILURE for $POSTMAN_SPEC_NAME"; continue; fi
+            if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then echo "CRITICAL FAILURE for $POSTMAN_SPEC_NAME: Could not extract Collection ID."; continue; fi
             echo "SUCCESS: Collection ID: $COLLECTION_ID ($COL_REQUEST_METHOD)"
 
             # 5. Update results for the next step (JWT injection/Newman)
@@ -165,8 +169,7 @@ jobs:
       #######################################################################
       - name: 4️⃣ FINAL: Create Base Dev Environment
         run: |
-          # The logic here remains simple POST, as Environment updates are handled outside the scope
-          # of this collection sync pattern.
+          # Creates the initial environment if it does not exist.
           ENV_PAYLOAD=$(jq -n \
             --arg baseUrl "$MOCK_SERVER_URL" \
             --arg tokenUrl "$AUTH_SERVER_URL" \
