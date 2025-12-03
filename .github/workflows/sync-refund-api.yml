@@ -20,200 +20,122 @@ jobs:
       - uses: actions/checkout@v3
 
       #######################################################################
-      # 1. Read Spec File and Convert to Single-Line String
+      # 1. Read Spec File and Convert to Single-Line String (Updated for robustness)
       #######################################################################
       - name: Load Spec File Into Variable
         id: loadspec
         run: |
           FILE=$(ls specs/payment-refund-api-openapi.*)
-          # Use sed to escape quotes and escape newlines (required for inline JSON schema upload)
+          
+          # Determine language based on extension
+          if [[ "$FILE" =~ \.(yaml|yml)$ ]]; then
+              LANG="yaml"
+          elif [[ "$FILE" =~ \.json$ ]]; then
+              LANG="json"
+          else
+              echo "Error: Unsupported file extension for $FILE"
+              exit 1
+          fi
+
+          # Use sed to escape quotes and escape newlines
           CONTENTS=$(sed 's/"/\\"/g' "$FILE" | sed ':a;N;$!ba;s/\n/\\n/g')
+          
           echo "contents=$CONTENTS" >> $GITHUB_OUTPUT
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
+          echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FINAL ROBUST FIX using Workspace endpoint)
-      #######################################################################
-      - name: Ensure API Exists (Using Stable Workspace Endpoint)
-        id: ensureapi
-        run: |
-          API_NAME="Payment Refund API"
-          # Using the new, working workspace ID
-          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
-          echo "Searching for existing API: $API_NAME in new workspace $WORKSPACE_ID"
-
-          # 1. API Lookup (Confirms key/ID work for GET requests)
-          # We still use the v10 list endpoint as it works perfectly for lookups
-          API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID")
-          
-          HTTP_STATUS=$(echo "$API_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
-          API_BODY=$(echo "$API_LOOKUP" | head -n -1)
-
-          echo "--- RAW API LOOKUP RESPONSE (HTTP Status: $HTTP_STATUS) ---"
-          echo "$API_BODY"
-          echo "--------------------------------------------------------"
-
-          if [ "$HTTP_STATUS" != "200" ]; then 
-            echo "ERROR: Lookup failed (HTTP $HTTP_STATUS)."
-            exit 1 
-          fi
-
-          API_ID=$(echo "$API_BODY" | jq -r \
-            ".apis[] | select(.name==\"$API_NAME\") | .id")
-
-          if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
-            echo "API does not exist — creating via stable POST /workspaces endpoint…"
-            
-            # --- CRITICAL FIX: Use POST /workspaces/{id}/apis (V7/V8 stable endpoint) ---
-            CREATE_URL="https://api.getpostman.com/workspaces/$WORKSPACE_ID/apis"
-            
-            # Use printf to construct the simple payload required by the V7/V8 endpoint
-            CREATE_PAYLOAD=$(printf '{"api":{"name":"%s"}}' "$API_NAME")
-            
-            CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
-              "$CREATE_URL" \
-              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              -d "$CREATE_PAYLOAD") 
-            
-            HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
-            CREATE_BODY=$(echo "$CREATE" | head -n -1)
-
-            echo "--- RAW API CREATE RESPONSE (HTTP Status: $HTTP_STATUS) ---"
-            echo "$CREATE_BODY"
-            echo "----------------------------------------------------------"
-
-            if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
-              echo "ERROR: Failed to create API (HTTP $HTTP_STATUS) using stable endpoint. Check body for details."
-              exit 1
-            fi
-            
-            # The stable endpoint returns the ID as ".api.id"
-            API_ID=$(echo "$CREATE_BODY" | jq -r ".api.id")
-            
-            if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then 
-              echo "CRITICAL ERROR: Failed to parse API ID from creation response."
-              exit 1 
-            fi
-
-          else
-            echo "API exists: $API_ID"
-          fi
-
-          echo "api_id=$API_ID" >> $GITHUB_OUTPUT
-          echo "API_ID successfully exported: $API_ID"
-
-
-      #######################################################################
-      # 3. Ensure API Version Exists (with Debugging)
-      #######################################################################
-      - name: Ensure API Version Exists (with Debug)
-        id: ensureversion
-        run: |
-          API_ID="${{ steps.ensureapi.outputs.api_id }}"
-          VERSION_NAME="v1"
-          
-          echo "Looking up versions for API ID: $API_ID"
-
-          VERSION_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
-            -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            "https://api.getpostman.com/apis/$API_ID/versions")
-          
-          HTTP_STATUS=$(echo "$VERSION_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
-          VERSION_BODY=$(echo "$VERSION_LOOKUP" | head -n -1)
-
-          echo "--- RAW VERSION LOOKUP RESPONSE (HTTP Status: $HTTP_STATUS) ---"
-          echo "$VERSION_BODY"
-          echo "--------------------------------------------------------------"
-
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "ERROR: Failed to lookup API versions (HTTP $HTTP_STATUS)."
-            exit 1 
-          fi
-
-          VERSION_ID=$(echo "$VERSION_BODY" | jq -r \
-            ".versions[] | select(.name==\"$VERSION_NAME\") | .id")
-
-          if [ -z "$VERSION_ID" ] || [ "$VERSION_ID" == "null" ]; then
-            echo "Version not found — creating v1…"
-            CREATE_VERSION=$(curl -s -X POST \
-              "https://api.getpostman.com/apis/$API_ID/versions" \
-              -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-              -H "Content-Type: application/json" \
-              -d "{\"name\": \"$VERSION_NAME\"}")
-            
-            CREATE_VERSION_ID=$(echo "$CREATE_VERSION" | jq -r ".version.id")
-            
-            if [ -z "$CREATE_VERSION_ID" ] || [ "$CREATE_VERSION_ID" == "null" ]; then
-                echo "CRITICAL ERROR: Failed to parse Version ID from creation response."
-                exit 1
-            fi
-
-            VERSION_ID="$CREATE_VERSION_ID"
-            echo "Created new Version ID: $VERSION_ID"
-          fi
-
-          echo "version_id=$VERSION_ID" >> $GITHUB_OUTPUT
-          echo "VERSION_ID successfully exported: $VERSION_ID"
-
-      #######################################################################
-      # 4. Create/Update SPEC (Schema)
+      # 2. Upload/Update SPEC directly to Spec Hub (Simplest path per docs)
       #######################################################################
       - name: Upload Spec to Postman Spec Hub
         id: uploadspec
         run: |
-          API_ID="${{ steps.ensureapi.outputs.api_id }}"
-          VERSION_ID="${{ steps.ensureversion.outputs.version_id }}"
+          API_NAME="Payment Refund API"
+          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
           CONTENTS="${{ steps.loadspec.outputs.contents }}"
+          FILE_LANG="${{ steps.loadspec.outputs.file_type }}" 
 
-          echo "Attempting to upload spec to API $API_ID, Version $VERSION_ID..."
+          echo "Attempting to upload spec for API: $API_NAME to Spec Hub..."
 
-          # Create or update schema
-          CREATE_SCHEMA=$(curl -s -X POST \
-            "https://api.getpostman.com/apis/$API_ID/versions/$VERSION_ID/schemas" \
+          # --- Use the stable POST /specs endpoint (V7/V8 equivalent) ---
+          CREATE_SPEC=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+            "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
             -d "{
-                  \"type\": \"openapi3\",
-                  \"language\": \"yaml\",
-                  \"schema\": \"$CONTENTS\"
-                }")
+                  \"spec\": {
+                      \"name\": \"$API_NAME\",
+                      \"content\": \"$CONTENTS\",
+                      \"contentType\": \"$FILE_LANG\"
+                  }
+               }")
 
-          SCHEMA_ID=$(echo "$CREATE_SCHEMA" | jq -r ".schema.id")
+          HTTP_STATUS=$(echo "$CREATE_SPEC" | tail -n 1 | awk -F: '{print $2}')
+          SPEC_BODY=$(echo "$CREATE_SPEC" | head -n -1)
 
-          echo "Schema upload response: $CREATE_SCHEMA"
-          echo "schema_id=$SCHEMA_ID" >> $GITHUB_OUTPUT
+          echo "--- RAW SPEC UPLOAD RESPONSE (HTTP Status: $HTTP_STATUS) ---"
+          echo "$SPEC_BODY"
+          echo "------------------------------------------------------------"
 
+          if [ "$HTTP_STATUS" != "200" ] && [ "$HTTP_STATUS" != "201" ]; then
+              echo "ERROR: Failed to upload Spec (HTTP $HTTP_STATUS). Check body for details."
+              exit 1
+          fi
+
+          # The endpoint returns the ID as ".spec.id"
+          SPEC_ID=$(echo "$SPEC_BODY" | jq -r ".spec.id")
+          
+          if [ -z "$SPEC_ID" ] || [ "$SPEC_ID" == "null" ]; then 
+            echo "CRITICAL ERROR: Failed to parse SPEC ID from creation response."
+            exit 1 
+          fi
+
+          echo "Spec ID successfully created/updated: $SPEC_ID"
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
+          
       #######################################################################
-      # 5. Generate Collection from Spec
+      # 3. Generate Collection from Spec (USING SPEC ID)
       #######################################################################
       - name: Generate Collection from Spec
         id: gencoll
         run: |
-          SCHEMA_ID="${{ steps.uploadspec.outputs.schema_id }}"
-          # Manually define the workspace ID here as well, since it is needed for the payload
-          WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
+          SPEC_ID="${{ steps.uploadspec.outputs.spec_id }}"
+          
+          echo "Generating collection from Spec ID: $SPEC_ID"
 
-          GEN=$(curl -s -X POST \
-            "https://api.getpostman.com/apis/${{ steps.ensureapi.outputs.api_id }}/versions/${{ steps.ensureversion.outputs.version_id }}/schemas/$SCHEMA_ID/generate/collection" \
+          GEN=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
+            "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
-            -d "{\"workspace\": \"$WORKSPACE_ID\", \"overwrite\": true}") 
+            -d '{"options": {"requestParametersResolution": "example", "exampleParametersResolution": "example"}}') 
 
-          COLLECTION_ID=$(echo "$GEN" | jq -r ".collectionId")
+          HTTP_STATUS=$(echo "$GEN" | tail -n 1 | awk -F: '{print $2}')
+          GEN_BODY=$(echo "$GEN" | head -n -1)
 
-          echo "Collection generation response: $GEN"
+          echo "--- RAW GENERATION RESPONSE (HTTP Status: $HTTP_STATUS) ---"
+          echo "$GEN_BODY"
+          echo "----------------------------------------------------------"
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+              echo "ERROR: Collection generation failed (HTTP $HTTP_STATUS)."
+              exit 1
+          fi
+
+          COLLECTION_ID=$(echo "$GEN_BODY" | jq -r ".collection.id")
+
+          echo "Collection successfully generated: $COLLECTION_ID"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 6. Attach JWT Pre-request Script
+      # 4. Attach JWT Pre-request Script (Collection Update)
       #######################################################################
       - name: Inject JWT Script
         run: |
           COLLECTION_ID="${{ steps.gencoll.outputs.collection_id }}"
 
-          curl -X PUT \
+          echo "Injecting JWT pre-request script into collection $COLLECTION_ID"
+          
+          curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
             -H "Content-Type: application/json" \
@@ -224,6 +146,7 @@ jobs:
                       \"script\": {
                         \"type\": \"text/javascript\",
                         \"exec\": [
+                          \"// JWT Auth Script: Use pm.environment.get() for client/token details\",
                           \"const clientId = pm.environment.get('clientId');\",
                           \"const clientSecret = pm.environment.get('clientSecret');\",
                           \"const tokenUrl = pm.environment.get('tokenUrl');\",
@@ -240,9 +163,13 @@ jobs:
                 }"
 
       #######################################################################
-      # 7. (Optional) Run Tests Using Newman
+      # 5. (Optional) Run Tests Using Newman
       #######################################################################
       - name: Run Tests
         run: |
+          COLLECTION_ID="${{ steps.gencoll.outputs.collection_id }}"
+
           npm install -g newman
-          newman run "https://api.getpostman.com/collections/${{ steps.gencoll.outputs.collection_id }}?apikey=${{ secrets.POSTMAN_API_KEY }}"
+          echo "Running Newman tests on generated collection $COLLECTION_ID..."
+          
+          newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
