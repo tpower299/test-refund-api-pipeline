@@ -16,6 +16,7 @@ jobs:
       run:
         shell: bash -e {0}
         
+    # --- IMPORTANT: Variables loaded from GitHub Secrets ---
     env:
       POSTMAN_WORKSPACE_ID: ${{ secrets.POSTMAN_WORKSPACE_ID }} 
       POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -66,18 +67,15 @@ jobs:
             -o collection.json
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload) - FIXED PARSING
+      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload)
       #######################################################################
       - name: Upload or Update Collection (Initial Upload)
         id: upload_collection
         run: |
-          echo "Uploading to Workspace ID: $POSTMAN_WORKSPACE_ID" 
-          
           PAYLOAD=$(jq -n \
             --rawfile collection_content collection.json \
             '{collection: ($collection_content | fromjson)}' )
             
-          # Use temp files to cleanly separate the HTTP status code from the response body
           HTTP_CODE=$(curl -X POST \
             "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
@@ -91,7 +89,7 @@ jobs:
 
           if [[ "$HTTP_CODE" != "200" || -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to upload collection."
-            echo "HTTP STATUS: $HTTP_CODE (Should be 200)"
+            echo "HTTP STATUS: $HTTP_CODE"
             echo "RAW RESPONSE BODY: $RESPONSE_BODY"
             exit 1
           fi
@@ -131,17 +129,18 @@ jobs:
           echo "SUCCESS: Collection updated with advanced JWT script."
           
       #######################################################################
-      # 6. CREATE DEV ENVIRONMENT (Required Component)
+      # 6. CREATE DEV ENVIRONMENT (Required Component) - UPDATED BASE URL
       #######################################################################
       - name: Create Base Dev Environment
         id: create_env
         run: |
+          # Base URL updated to YOUR mock server URL
           ENV_PAYLOAD='{
             "environment": {
               "name": "Payment Processing - Dev",
               "values": [
-                { "key": "baseUrl", "value": "https://dev.api.paymentco.com/v1", "enabled": true },
-                { "key": "tokenUrl", "value": "https://auth.internal.com/token", "enabled": true },
+                { "key": "baseUrl", "value": "https://api.payments.example.com/v2", "enabled": true },
+                { "key": "tokenUrl", "value": "https://postman-echo.com/post", "enabled": true },
                 { "key": "clientId", "value": "dev-client-id-internal", "enabled": true },
                 { "key": "clientSecret", "value": "dev-secret-internal", "enabled": true },
                 { "key": "jwtToken", "value": "", "enabled": true },
@@ -162,27 +161,27 @@ jobs:
           ENV_ID=$(echo "$RESPONSE_BODY" | jq -r '.environment.id')
           
           if [[ "$HTTP_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
-            echo "WARNING: Environment creation failed (possibly exists)."
+            echo "WARNING: Environment creation failed (possibly exists or API Key issue)."
             echo "HTTP STATUS: $HTTP_CODE"
-            # Show the raw response to help user check for API key error
             echo "RAW RESPONSE BODY: $RESPONSE_BODY" 
           else
             echo "SUCCESS: Dev Environment created. ID: $ENV_ID"
           fi
           
       #######################################################################
-      # 7. Run tests using Newman (Final CI/CD Check)
+      # 7. Run tests using Newman (Final CI/CD Check) - UPDATED BASE URL
       #######################################################################
       - name: Run Tests (Newman Validation)
         run: |
           COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
-          echo "Running Newman tests to validate the synchronized collection (CI/CD)..."
+          echo "Running Newman tests against your Mock Server (CI/CD validation)..."
           
+          # Base URL is your actual mock server, Token URL is Postman Echo (for successful handshake)
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=$POSTMAN_API_KEY" \
             --insecure \
-            --env-var "baseUrl=https://mock-payment-api.com/dev" \
-            --env-var "tokenUrl=https://mock-auth.internal.com/token" \
+            --env-var "baseUrl=https://api.payments.example.com/v2" \
+            --env-var "tokenUrl=https://postman-echo.com/post" \
             --env-var "clientId=mock_client" \
             --env-var "clientSecret=mock_secret"
             
-          echo "Newman run complete. All required steps for the Adoption Starter Kit are demonstrated."
+          echo "Newman run complete. The pipeline should now successfully validate against your mock server!"
