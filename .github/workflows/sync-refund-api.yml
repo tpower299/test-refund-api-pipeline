@@ -45,7 +45,6 @@ jobs:
         run: |
           echo "Creating Spec in Hub (Conceptual Proof)..."
           
-          # This block successfully uploads/updates the Spec entity in your Postman API section.
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
             '{
@@ -69,7 +68,7 @@ jobs:
 
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY (Workaround for broken API)
+      # 3. GENERATE COLLECTION LOCALLY (FIXED: Removing -n option)
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
@@ -78,10 +77,10 @@ jobs:
           npm install -g openapi-to-postmanv2
           
           # Generate the collection file from the OpenAPI spec
+          # FIX: Removed the unsupported '-n' flag to allow the command to run.
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
-            -o collection.json \
-            -n "Payment Refund API - Test Collection"
+            -o collection.json
             
           echo "SUCCESS: Collection JSON generated locally."
 
@@ -97,7 +96,6 @@ jobs:
         run: |
           echo "Uploading generated collection to Postman..."
           
-          # The POST /collections endpoint reliably accepts a complete collection file
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -124,8 +122,7 @@ jobs:
           COLLECTION_ID: ${{ steps.upload_collection.outputs.collection_id }}
         run: |
           echo "Injecting JWT prerequest script…"
-          # ... (script payload unchanged, targeting the collection ID from the previous step)
-
+          
           PAYLOAD=$(jq -n \
             '{"collection": {
               "event": [{
