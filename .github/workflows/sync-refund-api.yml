@@ -16,7 +16,6 @@ jobs:
       run:
         shell: bash -e {0}
         
-    # --- IMPORTANT: Variables loaded from GitHub Secrets ---
     env:
       POSTMAN_WORKSPACE_ID: ${{ secrets.POSTMAN_WORKSPACE_ID }} 
       POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
@@ -41,32 +40,20 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. CREATE SPEC IN SPEC HUB (Conceptual Proof) - DEBUG ADDED
+      # 2. CREATE SPEC IN SPEC HUB (Conceptual Proof)
       #######################################################################
       - name: Create Spec in Spec Hub (Conceptual Proof)
         id: create_spec
         run: |
-          echo "DEBUG: API Key starting with: ${POSTMAN_API_KEY:0:5}..."
-          echo "DEBUG: Workspace ID being used: $POSTMAN_WORKSPACE_ID" 
-          
           PAYLOAD=$(jq -n \
             --rawfile spec_content "${{ steps.spec.outputs.specfile }}" \
             '{ name: "Payment Refund API", type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
             
-          RESPONSE=$(curl -w "%{http_code}" -X POST \
+          curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" | tail -n 1)
-
-          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
-          
-          if [[ "$STATUS_CODE" != "200" ]]; then
-              echo "WARNING: Spec Hub upload failed with status $STATUS_CODE. Ignoring for primary mission."
-              echo "RAW RESPONSE: $RESPONSE"
-          else
-              echo "SUCCESS: Spec entity created/updated in Spec Hub."
-          fi
+            -d "$PAYLOAD" > /dev/null
 
       #######################################################################
       # 3. GENERATE COLLECTION LOCALLY
@@ -77,10 +64,9 @@ jobs:
           npx openapi-to-postmanv2 \
             -s ${{ steps.spec.outputs.specfile }} \
             -o collection.json
-          echo "SUCCESS: Collection JSON generated locally."
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload) - HYPER-VIGILANT DEBUG
+      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload) - FIXED PARSING
       #######################################################################
       - name: Upload or Update Collection (Initial Upload)
         id: upload_collection
@@ -91,19 +77,22 @@ jobs:
             --rawfile collection_content collection.json \
             '{collection: ($collection_content | fromjson)}' )
             
-          RESPONSE=$(curl -w "%{http_code}" -X POST \
+          # Use temp files to cleanly separate the HTTP status code from the response body
+          HTTP_CODE=$(curl -X POST \
             "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" | tail -n 1)
-                      
-          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
-          COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
+            -d "$PAYLOAD" \
+            -o response_body.json \
+            -w "%{http_code}")
+          
+          RESPONSE_BODY=$(cat response_body.json)
+          COLLECTION_ID=$(echo "$RESPONSE_BODY" | jq -r '.collection.id')
 
-          if [[ "$STATUS_CODE" != "200" || -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
+          if [[ "$HTTP_CODE" != "200" || -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
             echo "CRITICAL ERROR: Failed to upload collection."
-            echo "HTTP STATUS: $STATUS_CODE (Should be 200)"
-            echo "RAW RESPONSE: $RESPONSE"
+            echo "HTTP STATUS: $HTTP_CODE (Should be 200)"
+            echo "RAW RESPONSE BODY: $RESPONSE_BODY"
             exit 1
           fi
           echo "SUCCESS: Collection uploaded. ID: $COLLECTION_ID"
@@ -123,7 +112,7 @@ jobs:
           if echo "$FULL_COLLECTION_RESPONSE" | jq -e '.collection' > /dev/null; then
               FULL_COLLECTION=$(echo "$FULL_COLLECTION_RESPONSE" | jq '.collection')
           else
-              echo "CRITICAL ERROR: Failed to fetch collection for modification (The collection exists, but we can't retrieve it. Check API Key permissions!)."
+              echo "CRITICAL ERROR: Failed to fetch collection for modification (ID: $COLLECTION_ID). Check API Key permissions."
               exit 1
           fi
           
@@ -142,7 +131,7 @@ jobs:
           echo "SUCCESS: Collection updated with advanced JWT script."
           
       #######################################################################
-      # 6. CREATE DEV ENVIRONMENT (Required Component) - DEBUG ADDED
+      # 6. CREATE DEV ENVIRONMENT (Required Component)
       #######################################################################
       - name: Create Base Dev Environment
         id: create_env
@@ -161,19 +150,22 @@ jobs:
             }
           }'
 
-          RESPONSE=$(curl -w "%{http_code}" -X POST \
+          HTTP_CODE=$(curl -X POST \
             "https://api.getpostman.com/environments?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$ENV_PAYLOAD" | tail -n 1)
-
-          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
-          ENV_ID=$(echo "$RESPONSE" | jq -r '.environment.id')
+            -d "$ENV_PAYLOAD" \
+            -o response_env_body.json \
+            -w "%{http_code}")
           
-          if [[ "$STATUS_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
-            echo "CRITICAL WARNING: Environment creation failed."
-            echo "HTTP STATUS: $STATUS_CODE (Should be 200)"
-            echo "RAW RESPONSE: $RESPONSE"
+          RESPONSE_BODY=$(cat response_env_body.json)
+          ENV_ID=$(echo "$RESPONSE_BODY" | jq -r '.environment.id')
+          
+          if [[ "$HTTP_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
+            echo "WARNING: Environment creation failed (possibly exists)."
+            echo "HTTP STATUS: $HTTP_CODE"
+            # Show the raw response to help user check for API key error
+            echo "RAW RESPONSE BODY: $RESPONSE_BODY" 
           else
             echo "SUCCESS: Dev Environment created. ID: $ENV_ID"
           fi
