@@ -85,7 +85,7 @@ jobs:
           echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT 
 
       #######################################################################
-      # 4. Generate collection from the spec (FIXED: Removing options)
+      # 4. Generate collection from the spec (FIXED: Empty options object)
       #######################################################################
       - name: Generate Collection from Spec
         id: gen_collection
@@ -95,12 +95,12 @@ jobs:
         run: |
           echo "Generating collection from Spec ID $SPEC_ID…"
 
-          # FIX: Removed the entire "options" object to use the API's default/schema generation logic.
+          # FIX: Sending an empty "options" object to satisfy the conflicting API requirement.
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"name": "Payment Refund API"}') 
+            -d '{"name": "Payment Refund API", "options": {}}') 
 
           echo "Collection generation response: $RESPONSE"
 
