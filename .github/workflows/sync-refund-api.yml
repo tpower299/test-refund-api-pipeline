@@ -16,26 +16,27 @@ jobs:
       - uses: actions/setup-node@v4
 
       #######################################################################
-      # 1. Find spec file
+      # 1. Detect spec file
       #######################################################################
       - name: Detect Spec File
         id: spec
         run: |
           FILE=$(ls specs/payment-refund-api-openapi.*)
-          echo "specfile=$FILE" >> $GITHUB_OUTPUT
           echo "Found spec: $FILE"
+          echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Sanitize encoding
+      # 2. Sanitize encoding (prevent BOM / CR issues)
       #######################################################################
       - name: Sanitize Encoding
         run: |
           FILE="${{ steps.spec.outputs.specfile }}"
           iconv -c -f utf-8 -t utf-8 "$FILE" | tr -d '\r' > "$FILE.tmp"
           mv "$FILE.tmp" "$FILE"
+          echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC (Spec Hub)
+      # 3. CREATE SPEC IN SPEC HUB (multipart upload — fully correct)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -44,100 +45,107 @@ jobs:
           WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785
           FILE_PATH: ${{ steps.spec.outputs.specfile }}
         run: |
-          SPEC_CONTENT=$(cat "$FILE_PATH" | sed 's/"/\\"/g')
-
-          PAYLOAD=$(jq -n \
-            --arg name "Payment Refund API" \
-            --arg content "$SPEC_CONTENT" \
-            '{"spec": {"name": $name, "content": $content, "contentType": "yaml"}}')
+          echo "Uploading spec via multipart/form-data…"
 
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$WORKSPACE_ID" \
             -H "X-Api-Key: $API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -H "Accept: application/json" \
+            -F "specName=Payment Refund API" \
+            -F "contentType=openapi" \
+            -F "specFile=@$FILE_PATH")
 
           echo "Spec creation response: $RESPONSE"
 
           SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
 
           if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
-            echo "Failed to extract SPEC_ID"
+            echo "ERROR: Failed to extract SPEC_ID"
             exit 1
           fi
 
-          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
           echo "Created Spec ID: $SPEC_ID"
+          echo "spec_id=$SPEC_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 4. Generate a Collection from the Spec
+      # 4. Generate collection from the spec
       #######################################################################
       - name: Generate Collection from Spec
-        id: gen
+        id: gen_collection
         env:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
           SPEC_ID: ${{ steps.create_spec.outputs.spec_id }}
         run: |
+          echo "Generating collection…"
+
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/specs/$SPEC_ID/generations/collection" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d '{"options": {"requestParametersResolution": "example"}}')
+            -d '{"options":{"requestParametersResolution":"example"}}')
 
           echo "Collection generation response: $RESPONSE"
 
           COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
 
           if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
-            echo "Failed to extract COLLECTION_ID"
+            echo "ERROR: Failed to extract COLLECTION_ID"
             exit 1
           fi
 
-          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
           echo "Generated Collection ID: $COLLECTION_ID"
+          echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 5. Inject JWT pre-request script
+      # 5. Inject JWT Pre-request Script
       #######################################################################
       - name: Inject JWT Script
         env:
           API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          COLLECTION_ID: ${{ steps.gen.outputs.collection_id }}
+          COLLECTION_ID: ${{ steps.gen_collection.outputs.collection_id }}
         run: |
-          PAYLOAD=$(jq -n \
-            '{"collection": {"event": [{
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "const clientId = pm.environment.get(\"clientId\");",
-                  "const clientSecret = pm.environment.get(\"clientSecret\");",
-                  "const tokenUrl = pm.environment.get(\"tokenUrl\");",
-                  "",
-                  "pm.sendRequest({",
-                  "  url: tokenUrl,",
-                  "  method: \"POST\",",
-                  "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
-                  "  body: \"client_id=\" + clientId + \"&client_secret=\" + clientSecret + \"&grant_type=client_credentials\"",
-                  "}, (err, res) => {",
-                  "  if (!err) pm.environment.set(\"jwtToken\", res.json().access_token);",
-                  "});"
-                ]
-              }
-            }]}}')
+          echo "Injecting JWT prerequest script…"
 
-          curl -s -X PUT \
+          PAYLOAD=$(jq -n \
+            '{"collection": {
+              "event": [{
+                "listen": "prerequest",
+                "script": {
+                  "type": "text/javascript",
+                  "exec": [
+                    "const clientId = pm.environment.get(\"clientId\");",
+                    "const clientSecret = pm.environment.get(\"clientSecret\");",
+                    "const tokenUrl = pm.environment.get(\"tokenUrl\");",
+                    "",
+                    "pm.sendRequest({",
+                    "  url: tokenUrl,",
+                    "  method: \"POST\",",
+                    "  header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
+                    "  body: \"client_id=\" + clientId + \"&client_secret=\" + clientSecret + \"&grant_type=client_credentials\"",
+                    "}, (err, res) => {",
+                    "  if (!err) pm.environment.set(\"jwtToken\", res.json().access_token);",
+                    "});"
+                  ]
+                }
+              }]
+            }}')
+
+          RESPONSE=$(curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+
+          echo "Collection update response: $RESPONSE"
 
       #######################################################################
-      # 6. Run tests via Newman
+      # 6. Run tests using Newman
       #######################################################################
       - name: Run Tests
         run: |
           npm install newman
-          COLLECTION_ID="${{ steps.gen.outputs.collection_id }}"
+          COLLECTION_ID="${{ steps.gen_collection.outputs.collection_id }}"
+
+          echo "Running Newman tests…"
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}"
 
