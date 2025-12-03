@@ -25,7 +25,6 @@ jobs:
       - name: Detect Spec File
         id: spec
         run: |
-          # Finds the single spec file regardless of extension
           FILE=$(ls specs/payment-refund-api-openapi.*)
           echo "Found spec: $FILE"
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
@@ -41,7 +40,7 @@ jobs:
           echo "Encoding sanitized."
 
       #######################################################################
-      # 3. CREATE SPEC IN SPEC HUB (Final Type Fix)
+      # 3. CREATE SPEC IN SPEC HUB (jq path fixed)
       #######################################################################
       - name: Create Spec in Spec Hub
         id: create_spec
@@ -52,7 +51,6 @@ jobs:
         run: |
           echo "Constructing JSON payload with final type fix: OPENAPI:3.0..."
           
-          # FINAL FIX: Change the 'type' value to the exact enum required by the API.
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE_PATH" \
             '{
@@ -76,9 +74,11 @@ jobs:
 
           echo "Spec creation response: $RESPONSE"
 
-          SPEC_ID=$(echo "$RESPONSE" | jq -r '.spec.id')
-
-          if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" ]]; then
+          # CRITICAL FIX: The API returns the ID at the top level (.id) not nested (.spec.id)
+          SPEC_ID=$(echo "$RESPONSE" | jq -r '.id')
+          
+          # Check for existence of the ID field AND check for known API error structure
+          if [[ -z "$SPEC_ID" || "$SPEC_ID" == "null" || "$SPEC_ID" == "Required property" ]]; then
             echo "CRITICAL ERROR: Failed to create spec. Final error response: $RESPONSE"
             exit 1
           fi
