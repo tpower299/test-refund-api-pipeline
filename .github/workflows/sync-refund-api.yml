@@ -31,7 +31,7 @@ jobs:
           
           if [[ "$FILE" =~ \.(yaml|yml)$ ]]; then
               LANG="yaml"
-          elif [[ "$FILE" =~ \.json$ ]]; then
+          elif [[ "$FILE" =~ \.json$ ]]; compressible
               LANG="json"
           else
               echo "Error: Unsupported file extension for $FILE"
@@ -43,8 +43,20 @@ jobs:
           echo "file_type=$LANG" >> $GITHUB_OUTPUT
 
       #######################################################################
+      # 1.5 SANITIZE SPEC FILE CONTENT (TO FIX INVISIBLE CHARACTERS)
+      # This step strips non-ASCII/non-standard characters that often corrupt YAML parsing.
+      #######################################################################
+      - name: Sanitize YAML File Encoding
+        run: |
+          FILE="${{ steps.loadspec.outputs.specfile }}"
+          
+          # Use iconv to strip non-standard characters and tr to ensure LF line endings.
+          iconv -c -f utf-8 -t utf-8 "$FILE" | tr -d '\r' > "${FILE}.tmp"
+          mv "${FILE}.tmp" "$FILE"
+          echo "File encoding sanitized."
+
+      #######################################################################
       # DIAGNOSTIC CHECK: Validate API Key has access to Workspace ID
-      # This step checks authentication BEFORE the Postman CLI command runs.
       #######################################################################
       - name: Validate Workspace Access
         id: workspace_check
@@ -65,7 +77,6 @@ jobs:
             echo "--- WORKSPACE ACCESS ERROR ---"
             echo "The API Key does NOT have access to Workspace ID: $WORKSPACE_ID."
             echo "Postman API Response: $ERROR_MESSAGE"
-            echo "ACTION REQUIRED: Ensure your API Key is an admin key and has permission for this workspace."
             exit 1
           else
             # Extract and confirm the workspace name if successful
@@ -91,22 +102,20 @@ jobs:
           API_KEY="${{ secrets.POSTMAN_API_KEY }}"
 
           echo "--- Running Spec Lint Check ---"
-          # LINT CHECK: Ensures file content is valid before trying to publish.
-          npx postman spec lint "$FILE" 
+          # LINT CHECK: Ensures file content is valid.
+          npm exec postman -- spec lint "$FILE" 
           echo "--- Lint Check Complete ---"
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # COMMAND: The most reliable CLI command syntax: file path positional, IDs via ENV VARS.
-          OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npx postman api publish "$FILE" \
+          # COMMAND: The most reliable CLI command syntax: positional file arg, IDs via ENV VARS.
+          OUTPUT=$(POSTMAN_API_KEY="$API_KEY" POSTMAN_WORKSPACE_ID="$WORKSPACE_ID" npm exec postman -- api publish "$FILE" \
             --name "$API_NAME") 
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
           echo "------------------------------"
           
-          
-          # The 'api publish' command should return details about the API version created.
           
           # 1. Parse for API ID
           API_ID=$(echo "$OUTPUT" | jq -r '.api.id')
@@ -118,8 +127,6 @@ jobs:
           
           echo "API ID pushed: $API_ID"
           echo "api_id=$API_ID" >> $GITHUB_OUTPUT
-          
-          # Note: The CLI handles the Spec and Collection creation, but we need the COLLECTION ID for the next steps.
           
           # 2. Fetch the latest API Version ID from the output
           API_VERSION_ID=$(echo "$OUTPUT" | jq -r '.api.versions[0].id')
