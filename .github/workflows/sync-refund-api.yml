@@ -58,12 +58,12 @@ jobs:
 
           echo "Publishing spec file ($FILE) for API: $API_NAME to Spec Hub via Postman CLI..."
 
-          # CRITICAL FIX: Using 'postman api publish' with '--file' flag, which is the current 
-          # vendor-supported command for syncing a spec file to the API registry.
+          # CRITICAL FIX: Using 'postman api publish' with the required '--name' flag.
           OUTPUT=$(POSTMAN_API_KEY="$API_KEY" npx postman api publish \
             --file "$FILE" \
             --workspace-id $WORKSPACE_ID \
-            --api-key "$API_KEY") 
+            --api-key "$API_KEY" \
+            --name "$API_NAME") # <--- REQUIRED FLAG RE-INTRODUCED
 
           echo "--- POSTMAN CLI RAW OUTPUT ---"
           echo "$OUTPUT"
