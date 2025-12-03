@@ -52,7 +52,7 @@ jobs:
           echo "File encoding sanitized."
 
       #######################################################################
-      # 2. PUBLISH SPEC via POSTMAN CLI (Reverting to Official Tool)
+      # 2. PUBLISH SPEC via POSTMAN CLI (Fixing EACCES)
       #######################################################################
       - name: Publish Spec via Postman CLI
         id: postman_import
@@ -61,8 +61,8 @@ jobs:
           WORKSPACE_ID="2bf1dd30-2897-4f0d-abf9-4a02d2970785" 
           FILE="${{ steps.loadspec.outputs.specfile }}"
           
-          # Install Postman CLI
-          npm install -g postman-cli
+          # CRITICAL FIX: Use sudo to grant permission for global install
+          sudo npm install -g postman-cli
           
           echo "Using Postman CLI to import spec to API ID: $API_ID"
           
@@ -70,9 +70,6 @@ jobs:
           VERSION_NAME="v2.1.0-build-$(date +%Y%m%d%H%M%S)"
 
           # CRITICAL STEP: Use the CLI command to sync the spec. 
-          # We use the '--base-api-version' flag to bypass the server-side bug.
-          # The output will contain the generated Collection ID.
-          
           CLI_OUTPUT=$(postman api import "$FILE" \
             --base-api-id "$API_ID" \
             --base-api-version "$VERSION_NAME" \
@@ -83,11 +80,11 @@ jobs:
           echo "$CLI_OUTPUT"
 
           # Parse the output to get the created Collection ID
-          # The CLI output contains a "Successfully imported to collection" line.
+          # The CLI output contains a line like: "Successfully imported to collection [Collection Name] (ID)"
           COLLECTION_ID=$(echo "$CLI_OUTPUT" | grep "collection" | tail -1 | awk '{print $NF}' | tr -d '[:punct:]')
           
           if [ -z "$COLLECTION_ID" ]; then
-             echo "CRITICAL ERROR: Failed to parse Collection ID from Postman CLI output."
+             echo "CRITICAL ERROR: Failed to parse Collection ID from Postman CLI output. Check CLI log above."
              exit 1
           fi
 
