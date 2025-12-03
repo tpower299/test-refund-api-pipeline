@@ -32,17 +32,18 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. Create API If Not Exists (FIXED with v10 Accept Header)
+      # 2. Create API If Not Exists (FIXED for missing workspaceId in URL)
       #######################################################################
       - name: Ensure API Exists (with Fix)
         id: ensureapi
         run: |
           API_NAME="Payment Refund API"
-          echo "Searching for existing API: $API_NAME in workspace ${{ secrets.POSTMAN_WORKSPACE_ID }}"
+          WORKSPACE_ID="${{ secrets.POSTMAN_WORKSPACE_ID }}"
+          echo "Searching for existing API: $API_NAME in workspace $WORKSPACE_ID"
 
-          # API Lookup 
+          # API Lookup - Workspace ID as query parameter for lookup
           API_LOOKUP=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
-            "https://api.getpostman.com/apis?workspace=${{ secrets.POSTMAN_WORKSPACE_ID }}")
+            "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID")
           
           HTTP_STATUS=$(echo "$API_LOOKUP" | tail -n 1 | awk -F: '{print $2}')
           API_BODY=$(echo "$API_LOOKUP" | head -n -1)
@@ -62,13 +63,13 @@ jobs:
           if [ -z "$API_ID" ] || [ "$API_ID" == "null" ]; then
             echo "API does not exist or jq failed to find it — creating…"
             
-            # API Creation Call - Includes the required Accept: application/vnd.api.v10+json header
+            # API Creation Call - Workspace ID moved to URL query parameter and required Accept header added
             CREATE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
-              "https://api.getpostman.com/apis" \
+              "https://api.getpostman.com/apis?workspace=$WORKSPACE_ID" \
               -H "X-Api-Key: ${{ secrets.POSTMAN_API_KEY }}" \
               -H "Content-Type: application/json" \
               -H "Accept: application/vnd.api.v10+json" \
-              -d "{\"name\": \"$API_NAME\", \"workspace\": \"${{ secrets.POSTMAN_WORKSPACE_ID }}\"}")
+              -d "{\"name\": \"$API_NAME\"}") # Body only contains the name
             
             HTTP_STATUS=$(echo "$CREATE" | tail -n 1 | awk -F: '{print $2}')
             CREATE_BODY=$(echo "$CREATE" | head -n -1)
