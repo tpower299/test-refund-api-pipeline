@@ -1,4 +1,4 @@
-name: Sync API Spec → Generate Collection → Link API
+name: Sync API Spec → Generate Collection → Link API test
 
 on:
   push:
