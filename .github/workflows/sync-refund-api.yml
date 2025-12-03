@@ -16,9 +16,9 @@ jobs:
       run:
         shell: bash -e {0}
         
-    # Set Workspace ID here for ease of management
+    # --- IMPORTANT: Variables loaded from GitHub Secrets ---
     env:
-      POSTMAN_WORKSPACE_ID: 2bf1dd30-2897-4f0d-abf9-4a02d2970785 # Placeholder, replace with actual
+      POSTMAN_WORKSPACE_ID: ${{ secrets.POSTMAN_WORKSPACE_ID }} 
       POSTMAN_API_KEY: ${{ secrets.POSTMAN_API_KEY }}
       
     steps:
@@ -41,24 +41,32 @@ jobs:
           echo "specfile=$FILE" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. CREATE SPEC IN SPEC HUB (Conceptual Proof)
+      # 2. CREATE SPEC IN SPEC HUB (Conceptual Proof) - DEBUG ADDED
       #######################################################################
       - name: Create Spec in Spec Hub (Conceptual Proof)
         id: create_spec
         run: |
-          # Use the working PAYLOAD structure for Spec Hub (v1 API for specs)
+          echo "DEBUG: API Key starting with: ${POSTMAN_API_KEY:0:5}..."
+          echo "DEBUG: Workspace ID being used: $POSTMAN_WORKSPACE_ID" 
+          
           PAYLOAD=$(jq -n \
             --rawfile spec_content "${{ steps.spec.outputs.specfile }}" \
             '{ name: "Payment Refund API", type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
             
-          # Sending to /dev/null as originally written, assuming API access issues
-          curl -s -X POST \
+          RESPONSE=$(curl -w "%{http_code}" -X POST \
             "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" > /dev/null
-          echo "SUCCESS: Spec entity created/updated in Spec Hub (Pattern Demonstrated)."
-          # For demo, we don't need the actual spec ID since we generate locally
+            -d "$PAYLOAD" | tail -n 1)
+
+          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
+          
+          if [[ "$STATUS_CODE" != "200" ]]; then
+              echo "WARNING: Spec Hub upload failed with status $STATUS_CODE. Ignoring for primary mission."
+              echo "RAW RESPONSE: $RESPONSE"
+          else
+              echo "SUCCESS: Spec entity created/updated in Spec Hub."
+          fi
 
       #######################################################################
       # 3. GENERATE COLLECTION LOCALLY
@@ -72,94 +80,59 @@ jobs:
           echo "SUCCESS: Collection JSON generated locally."
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload)
+      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload) - HYPER-VIGILANT DEBUG
       #######################################################################
       - name: Upload or Update Collection (Initial Upload)
         id: upload_collection
         run: |
+          echo "Uploading to Workspace ID: $POSTMAN_WORKSPACE_ID" 
+          
           PAYLOAD=$(jq -n \
             --rawfile collection_content collection.json \
             '{collection: ($collection_content | fromjson)}' )
-          RESPONSE=$(curl -s -X POST \
+            
+          RESPONSE=$(curl -w "%{http_code}" -X POST \
             "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
+            -d "$PAYLOAD" | tail -n 1)
                       
+          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
           COLLECTION_ID=$(echo "$RESPONSE" | jq -r '.collection.id')
-          if [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
-            echo "CRITICAL ERROR: Failed to upload collection. Response: $RESPONSE"
+
+          if [[ "$STATUS_CODE" != "200" || -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
+            echo "CRITICAL ERROR: Failed to upload collection."
+            echo "HTTP STATUS: $STATUS_CODE (Should be 200)"
+            echo "RAW RESPONSE: $RESPONSE"
             exit 1
           fi
+          echo "SUCCESS: Collection uploaded. ID: $COLLECTION_ID"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 5. Inject JWT Pre-request Script (Fetch-Modify-Put Pattern) - ADVANCED EXPIRY LOGIC
+      # 5. Inject JWT Pre-request Script (Fetch-Modify-Put Pattern)
       #######################################################################
       - name: Inject Advanced JWT Script
-        env:
-          API_KEY: ${{ secrets.POSTMAN_API_KEY }}
-          COLLECTION_ID: ${{ steps.upload_collection.outputs.collection_id }}
         run: |
-          FULL_COLLECTION_RESPONSE=$(curl -s -X GET \
-            "https://api.getpostman.com/collections/$COLLECTION_ID" \
-            -H "X-Api-Key: $API_KEY")
-                    
+          COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
+          API_KEY="$POSTMAN_API_KEY"
+
+          # 5a. Fetch Collection
+          FULL_COLLECTION_RESPONSE=$(curl -s -X GET "https://api.getpostman.com/collections/$COLLECTION_ID" -H "X-Api-Key: $API_KEY")
+          
           if echo "$FULL_COLLECTION_RESPONSE" | jq -e '.collection' > /dev/null; then
               FULL_COLLECTION=$(echo "$FULL_COLLECTION_RESPONSE" | jq '.collection')
           else
-              echo "CRITICAL ERROR: Failed to fetch collection for modification."
+              echo "CRITICAL ERROR: Failed to fetch collection for modification (The collection exists, but we can't retrieve it. Check API Key permissions!)."
               exit 1
           fi
           
-          # Advanced JWT Script with Expiry Check and Header Upsert
-          JWT_SCRIPT='[
-              {
-                "listen": "prerequest",
-                "script": {
-                  "type": "text/javascript",
-                  "exec": [
-                    "// Advanced JWT Auth: Checks expiry and refreshes token",
-                    "const clientId = pm.environment.get(\"clientId\");",
-                    "const clientSecret = pm.environment.get(\"clientSecret\");",
-                    "const tokenUrl = pm.environment.get(\"tokenUrl\");",
-                    "const cachedToken = pm.environment.get(\"jwtToken\");",
-                    "const tokenExpiry = parseInt(pm.environment.get(\"tokenExpiry\"));",
-                    "",
-                    "// Check if token is valid (exists AND expiry time is > 30s in the future)",
-                    "if (cachedToken && tokenExpiry && Date.now() < (tokenExpiry - 30000)) {",
-                    "    pm.request.headers.upsert({key: \"Authorization\", value: \"Bearer \" + cachedToken});",
-                    "    return; // Skip token request",
-                    "}",
-                    "",
-                    "// Request new token",
-                    "pm.sendRequest({",
-                    "    url: tokenUrl,",
-                    "    method: \"POST\",",
-                    "    header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},",
-                    "    body: {mode: \"urlencoded\", urlencoded: [{key: \"grant_type\", value: \"client_credentials\"}, {key: \"client_id\", value: clientId}, {key: \"client_secret\", value: clientSecret}]} ",
-                    "}, (err, response) => {",
-                    "    if (err || response.code !== 200) {",
-                    "        console.error(\"Token request failed:\", err || response.status);",
-                    "        return;",
-                    "    }",
-                    "    const jsonData = response.json();",
-                    "    const token = jsonData.access_token;",
-                    "    const expires_in_ms = jsonData.expires_in * 1000;",
-                    "    ",
-                    "    pm.environment.set(\"jwtToken\", token);",
-                    "    pm.environment.set(\"tokenExpiry\", Date.now() + expires_in_ms);",
-                    "    ",
-                    "    pm.request.headers.upsert({key: \"Authorization\", value: \"Bearer \" + token});",
-                    "});"
-                  ]
-                }
-              }
-            ]'
+          # 5b. Define and Modify (Advanced JWT Script)
+          JWT_SCRIPT='[ { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [ "// Advanced JWT Auth: Checks expiry and refreshes token", "const clientId = pm.environment.get(\"clientId\");", "const clientSecret = pm.environment.get(\"clientSecret\");", "const tokenUrl = pm.environment.get(\"tokenUrl\");", "const cachedToken = pm.environment.get(\"jwtToken\");", "const tokenExpiry = parseInt(pm.environment.get(\"tokenExpiry\"));", "", "// Check if token is valid (exists AND expiry time is > 30s in the future)", "if (cachedToken && tokenExpiry && Date.now() < (tokenExpiry - 30000)) {", "    pm.request.headers.upsert({key: \"Authorization\", value: \"Bearer \" + cachedToken});", "    return; // Skip token request", "}", "", "// Request new token", "pm.sendRequest({", "    url: tokenUrl,", "    method: \"POST\",", "    header: {\"Content-Type\": \"application/x-www-form-urlencoded\"},", "    body: {mode: \"urlencoded\", urlencoded: [{key: \"grant_type\", value: \"client_credentials\"}, {key: \"client_id\", value: clientId}, {key: \"client_secret\", value: clientSecret}]} ", "}, (err, response) => {", "    if (err || response.code !== 200) {", "        console.error(\"Token request failed:\", err || response.status);", "        return;", "    }", "    const jsonData = response.json();", "    const token = jsonData.access_token;", "    const expires_in_ms = jsonData.expires_in * 1000; ", "    pm.environment.set(\"jwtToken\", token);", "    pm.environment.set(\"tokenExpiry\", Date.now() + expires_in_ms);", "    pm.request.headers.upsert({key: \"Authorization\", value: \"Bearer \" + token});", "});" ] } } ]'
                       
           MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
                     
-          # Send complete, modified collection back to the API using PUT
+          # 5c. Push Update (PUT)
           curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY" \
@@ -169,14 +142,11 @@ jobs:
           echo "SUCCESS: Collection updated with advanced JWT script."
           
       #######################################################################
-      # 6. CREATE DEV ENVIRONMENT (Required Component)
+      # 6. CREATE DEV ENVIRONMENT (Required Component) - DEBUG ADDED
       #######################################################################
       - name: Create Base Dev Environment
         id: create_env
-        env:
-          API_KEY: ${{ secrets.POSTMAN_API_KEY }}
         run: |
-          # The environment must contain the variables needed by the JWT script (Step 5)
           ENV_PAYLOAD='{
             "environment": {
               "name": "Payment Processing - Dev",
@@ -191,15 +161,19 @@ jobs:
             }
           }'
 
-          RESPONSE=$(curl -s -X POST \
+          RESPONSE=$(curl -w "%{http_code}" -X POST \
             "https://api.getpostman.com/environments?workspaceId=$POSTMAN_WORKSPACE_ID" \
-            -H "X-Api-Key: $API_KEY" \
+            -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$ENV_PAYLOAD")
+            -d "$ENV_PAYLOAD" | tail -n 1)
 
+          STATUS_CODE=$(echo $RESPONSE | tail -c 4)
           ENV_ID=$(echo "$RESPONSE" | jq -r '.environment.id')
-          if [[ -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
-            echo "WARNING: Failed to create environment. Assume it already exists."
+          
+          if [[ "$STATUS_CODE" != "200" || -z "$ENV_ID" || "$ENV_ID" == "null" ]]; then
+            echo "CRITICAL WARNING: Environment creation failed."
+            echo "HTTP STATUS: $STATUS_CODE (Should be 200)"
+            echo "RAW RESPONSE: $RESPONSE"
           else
             echo "SUCCESS: Dev Environment created. ID: $ENV_ID"
           fi
@@ -212,7 +186,6 @@ jobs:
           COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
           echo "Running Newman tests to validate the synchronized collection (CI/CD)..."
           
-          # Using mock environment variables to ensure the test runs in CI context
           npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=$POSTMAN_API_KEY" \
             --insecure \
             --env-var "baseUrl=https://mock-payment-api.com/dev" \
