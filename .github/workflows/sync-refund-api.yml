@@ -111,7 +111,10 @@ jobs:
             --arg baseId "$API_ID_FINAL" \
             '{"apiVersion": {"name": $name, "baseVersionId": $baseId}}')
           
-          printf "--- DEBUG JSON PAYLOAD ---\n%s\n--------------------------\n" "$VERSION_PAYLOAD" # Critical debug printout
+          # CRITICAL FIX: Use echo for safe debug printout
+          echo "--- DEBUG JSON PAYLOAD ---"
+          echo "$VERSION_PAYLOAD"
+          echo "--------------------------"
 
           RESPONSE=$(curl -s -X POST \
             "https://api.getpostman.com/apis/$API_ID_FINAL/versions?workspaceId=$WORKSPACE_ID" \
