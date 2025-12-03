@@ -64,12 +64,11 @@ jobs:
 
 
       #######################################################################
-      # 3. GENERATE AND INJECT SCRIPT LOCALLY (FIXED: Removed 'jq' from npm install)
+      # 3. GENERATE AND INJECT SCRIPT LOCALLY
       #######################################################################
       - name: Generate Collection and Inject Script Locally
         id: local_gen_inject
         run: |
-          # FIX: Removed 'jq' from the install list to rely on the stable system binary
           npm install -g openapi-to-postmanv2
           
           # 1. Generate collection JSON
@@ -104,7 +103,6 @@ jobs:
             
           # 2. Inject script directly into the local file using jq
           echo "Injecting JWT script into collection.json..."
-          # The system 'jq' binary is used here
           jq --argjson script_event "$JWT_SCRIPT" '.event = $script_event' collection.json > collection_modified.json
           mv collection_modified.json collection.json
           
@@ -144,13 +142,12 @@ jobs:
 
 
       #######################################################################
-      # 5. Run tests using Newman
+      # 5. Run tests using Newman (FIXED: Use Local File)
       #######################################################################
       - name: Run Tests
         run: |
           npm install newman
-          COLLECTION_ID="${{ steps.upload_collection.outputs.collection_id }}"
-
-          echo "Running Newman tests…"
-          # Using the stable single POST/No PUT approach
-          npx newman run "https://api.getpostman.com/collections/$COLLECTION_ID?apikey=${{ secrets.POSTMAN_API_KEY }}" --insecure
+          
+          echo "Running Newman tests against local collection.json..."
+          # Running Newman against the local file instead of the remote URL
+          npx newman run collection.json --insecure
