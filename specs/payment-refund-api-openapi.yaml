@@ -2,9 +2,9 @@ openapi: 3.0.3
 info:
   title: Payment Processing API - Refund Service
   description: |
-    Test  TEST  Comprehensive_API_for_managing payment refunds in a financial services platform.
-    This_API_handles_refund creation,TEST TEST TEST TEST status tracking, cancellation, and reporting for
-    payment_transactions processed through the authorization and capture workflow.
+    Test Comprehensive API for_managing payment refunds in a financial services platform.
+    This API handles refund creation, status tracking, cancellation, and reporting for
+    payment_transactions processed through the authorization and capture workflow.TEST
     
     **Authentication:**
     - External partners: OAuth 2.0 (***
