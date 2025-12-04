@@ -126,18 +126,19 @@ jobs:
           echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY
+      # 3. GENERATE COLLECTION LOCALLY (Fixed: Removed --test flag)
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
         run: |
           echo "Generating collection from: ${{ steps.spec.outputs.specfile }}"
           
-          # Quote the filename to handle spaces in paths
+          # We removed the --test flag which was causing the crash
+          # We also use quotes around the filename to handle spaces safely
           npx openapi-to-postmanv2 \
             -s "${{ steps.spec.outputs.specfile }}" \
             -o collection.json \
-            --test
+            -p 
             
           # Verify the file was actually created and has content
           if [[ ! -s collection.json ]]; then
@@ -175,7 +176,7 @@ jobs:
             echo "✅ Cleanup complete."
           fi
           
-          # 4. PREPARE PAYLOAD TO DISK (Crucial Fix for Large/Complex Payloads)
+          # 4. PREPARE PAYLOAD TO DISK
           echo "📦 Wrapping collection for upload..."
           # Use --slurpfile to handle large JSON safely, write to upload.json
           jq -n --slurpfile content collection.json \
@@ -230,7 +231,7 @@ jobs:
           MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
                     
           # 5c. Push Update (PUT)
-          # We also use a temp file here for safety, though collections are usually smaller after a fetch
+          # We also use a temp file here for safety
           echo "$MODIFIED_PAYLOAD" > modified_collection.json
           
           curl -s -X PUT \
