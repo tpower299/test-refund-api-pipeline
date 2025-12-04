@@ -46,11 +46,12 @@ jobs:
             exit 1
           fi
 
-          # Use Node.js to extract the title cleanly
+          # Use Node.js to extract the title cleanly (handles quotes/spaces better than grep)
           SPEC_NAME=$(node -e "
             const fs = require('fs');
             try {
               const content = fs.readFileSync('$FILE', 'utf8');
+              // Regex to find 'title:' followed by text, ignoring quotes
               const match = content.match(/title:\s*(?:[\"']?)(.*?)(?:[\"']?)\s*$/m);
               if (match && match[1]) console.log(match[1].trim());
               else console.log('');
@@ -70,7 +71,7 @@ jobs:
           echo "specname=$SPEC_NAME" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 2. CLEAN SYNC: DELETE OLD & CREATE NEW (Prevents Duplicates & Zombies)
+      # 2. CLEAN SYNC SPEC: DELETE OLD & CREATE NEW
       #######################################################################
       - name: Clean Sync Spec in Spec Hub
         id: create_spec
@@ -101,13 +102,11 @@ jobs:
           # 4. CREATE New Spec
           echo "🆕 Creating fresh Spec: '$SPEC_NAME'..."
           
-          # Prepare Payload
           PAYLOAD=$(jq -n \
             --rawfile spec_content "$FILE" \
             --arg name "$SPEC_NAME" \
             '{ name: $name, type: "OPENAPI:3.0", files: [{ path: "index.yaml", content: $spec_content }] }')
 
-          # Perform Create (POST)
           HTTP_CODE=$(curl -s -X POST \
             "https://api.getpostman.com/specs?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
@@ -116,7 +115,6 @@ jobs:
             -o response.json \
             -w "%{http_code}")
             
-          # Check for 200 OK or 201 Created
           if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
             echo "::error::Failed to create spec. Status: $HTTP_CODE"
             cat response.json
@@ -128,25 +126,64 @@ jobs:
           echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY
+      # 3. GENERATE COLLECTION LOCALLY (Space-Safe)
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
         run: |
+          echo "Generating collection from: ${{ steps.spec.outputs.specfile }}"
+          
+          # Fix: Quote the filename to handle spaces in paths
           npx openapi-to-postmanv2 \
-            -s ${{ steps.spec.outputs.specfile }} \
-            -o collection.json
+            -s "${{ steps.spec.outputs.specfile }}" \
+            -o collection.json \
+            --test
+            
+          # Verify the file was actually created and has content
+          if [[ ! -s collection.json ]]; then
+            echo "::error::collection.json was NOT generated. Check the openapi-to-postmanv2 logs above."
+            exit 1
+          fi
+          
+          echo "✅ Collection generated successfully."
 
       #######################################################################
-      # 4. UPLOAD/UPDATE COLLECTION (Initial Upload)
+      # 4. CLEAN SYNC COLLECTION: DELETE OLD & CREATE NEW
       #######################################################################
-      - name: Upload or Update Collection (Initial Upload)
+      - name: Clean Sync Collection
         id: upload_collection
         run: |
-          PAYLOAD=$(jq -n \
-            --rawfile collection_content collection.json \
-            '{collection: ($collection_content | fromjson)}' )
+          SPEC_NAME="${{ steps.spec.outputs.specname }}"
+          
+          echo "🔎 Checking for existing collections named: '$SPEC_NAME'..."
+          
+          # 1. Fetch all collections
+          LIST_RESPONSE=$(curl -s -X GET "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
+            -H "X-Api-Key: $POSTMAN_API_KEY")
             
+          # 2. Find ALL IDs with this name
+          MATCHING_IDS=$(echo "$LIST_RESPONSE" | jq -r --arg name "$SPEC_NAME" '.collections[] | select(.name == $name) | .id')
+          
+          # 3. DELETE them (Clear the path)
+          if [ -n "$MATCHING_IDS" ]; then
+            for ID in $MATCHING_IDS; do
+              echo "🗑️ Deleting existing/stale Collection ID: $ID"
+              curl -s -X DELETE \
+                "https://api.getpostman.com/collections/$ID" \
+                -H "X-Api-Key: $POSTMAN_API_KEY" > /dev/null
+            done
+            echo "✅ Cleanup complete."
+          fi
+          
+          # 4. PREPARE PAYLOAD (Force Collection Name to match Spec Name)
+          PAYLOAD=$(jq -n \
+            --rawfile content collection.json \
+            --arg name "$SPEC_NAME" \
+            '{collection: ($content | fromjson | .info.name = $name)}')
+
+          # 5. UPLOAD (Create New)
+          echo "🚀 Uploading new collection..."
+          
           HTTP_CODE=$(curl -X POST \
             "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
@@ -158,14 +195,13 @@ jobs:
           RESPONSE_BODY=$(cat response_body.json)
           COLLECTION_ID=$(echo "$RESPONSE_BODY" | jq -r '.collection.id')
           
-          # Check for 200 OK or 201 Created
           if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]] || [[ -z "$COLLECTION_ID" || "$COLLECTION_ID" == "null" ]]; then
-            echo "CRITICAL ERROR: Failed to upload collection."
-            echo "HTTP STATUS: $HTTP_CODE"
-            echo "RAW RESPONSE BODY: $RESPONSE_BODY"
+            echo "::error::Failed to upload collection. Status: $HTTP_CODE"
+            echo "Response: $RESPONSE_BODY"
             exit 1
           fi
-          echo "SUCCESS: Collection uploaded. ID: $COLLECTION_ID"
+          
+          echo "✅ Collection uploaded. ID: $COLLECTION_ID"
           echo "collection_id=$COLLECTION_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
