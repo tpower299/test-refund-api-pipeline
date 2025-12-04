@@ -126,14 +126,14 @@ jobs:
           echo "spec_id=$NEW_ID" >> $GITHUB_OUTPUT
 
       #######################################################################
-      # 3. GENERATE COLLECTION LOCALLY (Space-Safe)
+      # 3. GENERATE COLLECTION LOCALLY
       #######################################################################
       - name: Generate Collection Locally
         id: local_gen
         run: |
           echo "Generating collection from: ${{ steps.spec.outputs.specfile }}"
           
-          # Fix: Quote the filename to handle spaces in paths
+          # Quote the filename to handle spaces in paths
           npx openapi-to-postmanv2 \
             -s "${{ steps.spec.outputs.specfile }}" \
             -o collection.json \
@@ -148,7 +148,7 @@ jobs:
           echo "✅ Collection generated successfully."
 
       #######################################################################
-      # 4. CLEAN SYNC COLLECTION: DELETE OLD & CREATE NEW
+      # 4. CLEAN SYNC COLLECTION (File-Based Upload Fix)
       #######################################################################
       - name: Clean Sync Collection
         id: upload_collection
@@ -175,20 +175,22 @@ jobs:
             echo "✅ Cleanup complete."
           fi
           
-          # 4. PREPARE PAYLOAD (Force Collection Name to match Spec Name)
-          PAYLOAD=$(jq -n \
-            --rawfile content collection.json \
+          # 4. PREPARE PAYLOAD TO DISK (Crucial Fix for Large/Complex Payloads)
+          echo "📦 Wrapping collection for upload..."
+          # Use --slurpfile to handle large JSON safely, write to upload.json
+          jq -n --slurpfile content collection.json \
             --arg name "$SPEC_NAME" \
-            '{collection: ($content | fromjson | .info.name = $name)}')
+            '{collection: ($content[0] | .info.name = $name)}' > upload.json
 
-          # 5. UPLOAD (Create New)
+          # 5. UPLOAD FROM FILE
           echo "🚀 Uploading new collection..."
           
-          HTTP_CODE=$(curl -X POST \
+          # Use --data-binary @upload.json to bypass bash argument limits
+          HTTP_CODE=$(curl -s -X POST \
             "https://api.getpostman.com/collections?workspaceId=$POSTMAN_WORKSPACE_ID" \
             -H "X-Api-Key: $POSTMAN_API_KEY" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
+            --data-binary @upload.json \
             -o response_body.json \
             -w "%{http_code}")
           
@@ -228,11 +230,14 @@ jobs:
           MODIFIED_PAYLOAD=$(echo "$FULL_COLLECTION" | jq --argjson script_event "$JWT_SCRIPT" '. + {event: $script_event}')
                     
           # 5c. Push Update (PUT)
+          # We also use a temp file here for safety, though collections are usually smaller after a fetch
+          echo "$MODIFIED_PAYLOAD" > modified_collection.json
+          
           curl -s -X PUT \
             "https://api.getpostman.com/collections/$COLLECTION_ID" \
             -H "X-Api-Key: $API_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"collection\": $MODIFIED_PAYLOAD}" > /dev/null
+            --data-binary @modified_collection.json > /dev/null
           
           echo "SUCCESS: Collection updated with advanced JWT script."
 
